@@ -1,15 +1,28 @@
 use crate::types::{
-    DeviceClass, DeviceInfo, Finding, LinkStats, ReachabilityStats, Recommendation, Severity,
+    DeviceClass, DeviceInfo, Finding, LinkStats, ReachabilityStats, Recommendation, ServiceProbe,
+    Severity,
 };
 use chrono::Utc;
 use uuid::Uuid;
 
 pub mod rules;
 
+/// Tunable hints derived from the active industry profile + user settings.
+#[derive(Default, Debug, Clone)]
+pub struct ProfileHints {
+    /// MACs the user has pinned. Going offline on a watched MAC produces a
+    /// high-severity finding.
+    pub watchlist: Vec<String>,
+    /// Maximum acceptable RTT (ms) for SaaS/POS targets.
+    pub service_high_latency_ms: f32,
+}
+
 pub struct Context<'a> {
     pub link: &'a LinkStats,
     pub reach: &'a ReachabilityStats,
     pub devices: &'a [DeviceInfo],
+    pub services: &'a [ServiceProbe],
+    pub profile: ProfileHints,
 }
 
 pub struct RuleHit {

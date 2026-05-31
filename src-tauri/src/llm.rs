@@ -225,6 +225,7 @@ mod tests {
             devices: vec![],
             findings: vec![],
             recommendations: vec![],
+            service_reachability: vec![],
         }
     }
 

@@ -12,6 +12,9 @@ const DEFAULT_SETTINGS: Settings = {
   llm_api_key: null,
   llm_model: null,
   llm_base_url: null,
+  industry_profile: "home",
+  watchlist: [],
+  pos_targets: [],
 };
 
 interface AppState {

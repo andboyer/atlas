@@ -58,7 +58,14 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
     let link = collector.link_stats().await.ok()?;
     let reach = collector.reachability().await.ok()?;
 
-    let mut devices = crate::discovery::scan::discover_and_probe().await;
+    let settings = Settings::load(&state.settings_path).unwrap_or_default();
+    let profile = crate::commands::profile_hints_from(&settings);
+    let targets = crate::commands::effective_targets(&settings);
+
+    let (mut devices, services) = tokio::join!(
+        crate::discovery::scan::discover_and_probe(),
+        crate::probes::services::probe_services(&targets),
+    );
     if devices.is_empty() {
         devices = crate::commands::demo_devices();
     }
@@ -67,6 +74,8 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         link: &link,
         reach: &reach,
         devices: &devices,
+        services: &services,
+        profile,
     });
     let recommendations = detect::collect_recommendations(&findings);
 
@@ -79,6 +88,7 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         devices,
         findings,
         recommendations,
+        service_reachability: services,
     };
 
     if let Err(e) = state.store.record_scan(&result) {

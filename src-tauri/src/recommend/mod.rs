@@ -161,5 +161,32 @@ pub fn catalog() -> Vec<Recommendation> {
             ],
             &[],
         ),
+        rec(
+            "rec.pos_processor_path",
+            "Restore the path to your payment processor",
+            "We can't reach one or more of the payment / SaaS endpoints your POS depends on. Card payments will fail until this is restored.",
+            &[
+                "Run a wired speed test from a laptop plugged directly into the router to confirm the LAN is okay.",
+                "From a laptop, try `curl -v https://api.clover.com` (or the affected hostname) — TLS or DNS errors here point at upstream filtering.",
+                "Check the ISP status page for outages in your area.",
+                "If you have content-filtering, captive portal, or VPN configured, allowlist the payment-processor domains.",
+                "Confirm router/firewall isn't blocking outbound 443 to the listed hosts.",
+                "Failover to LTE/5G on terminals that support it until the path is restored.",
+            ],
+            &[],
+        ),
+        rec(
+            "rec.investigate_device",
+            "A pinned device dropped",
+            "One of your watchlisted devices is offline. Because you flagged it as important, this is treated as a critical event.",
+            &[
+                "Confirm the device is powered on and not in sleep mode.",
+                "Check this app's incident timeline for the moment it dropped — was the LAN simultaneously unhealthy?",
+                "If only this device dropped, reboot the device or reconnect it to WiFi.",
+                "If many devices dropped together, the issue is the network (AP / channel / DHCP), not the device.",
+                "For POS / payment terminals: failover to LTE on devices that support it until WiFi is restored.",
+            ],
+            &[],
+        ),
     ]
 }

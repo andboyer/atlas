@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod llm;
 mod monitor;
 pub mod probes;
+pub mod profiles;
 mod recommend;
 pub mod settings;
 mod store;

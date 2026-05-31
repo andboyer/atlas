@@ -23,6 +23,13 @@ pub struct Settings {
     pub llm_model: Option<String>,
     /// Base URL override — required for Ollama (e.g. "http://localhost:11434").
     pub llm_base_url: Option<String>,
+
+    /// Industry profile id: "retail_pos", "smart_home", "office", or "home".
+    pub industry_profile: String,
+    /// MAC addresses of devices the user has pinned for high-priority alerting.
+    pub watchlist: Vec<String>,
+    /// `host:port` strings to probe for SaaS / payment-processor reachability.
+    pub pos_targets: Vec<String>,
 }
 
 impl Default for Settings {
@@ -36,6 +43,9 @@ impl Default for Settings {
             llm_api_key: None,
             llm_model: None,
             llm_base_url: None,
+            industry_profile: "home".to_string(),
+            watchlist: vec![],
+            pos_targets: vec![],
         }
     }
 }
@@ -88,9 +98,11 @@ mod tests {
     fn round_trip() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let mut s = Settings::default();
-        s.monitoring_enabled = true;
-        s.llm_provider = Some("openai".to_string());
+        let s = Settings {
+            monitoring_enabled: true,
+            llm_provider: Some("openai".to_string()),
+            ..Default::default()
+        };
         s.save(&path).unwrap();
 
         let loaded = Settings::load(&path).unwrap();

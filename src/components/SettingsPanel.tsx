@@ -29,6 +29,13 @@ const DEFAULT_MODELS: Record<string, string> = {
   ollama: "llama3",
 };
 
+const PROFILES = [
+  { id: "home", label: "Home / General" },
+  { id: "retail_pos", label: "Retail / Restaurant POS" },
+  { id: "smart_home", label: "Smart Home" },
+  { id: "office", label: "Small Office" },
+];
+
 export function SettingsPanel({ onClose }: Props) {
   const { settings, saveSettings, startMonitoring, stopMonitoring, monitoring } = useApp((s) => ({
     settings: s.settings,
@@ -151,6 +158,84 @@ export function SettingsPanel({ onClose }: Props) {
                   </select>
                 </div>
               )}
+            </div>
+          </section>
+
+          {/* Industry profile, watchlist, POS targets */}
+          <section>
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Industry profile
+            </h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm">Profile</span>
+                <select
+                  value={draft.industry_profile ?? "home"}
+                  onChange={(e) => update({ industry_profile: e.target.value })}
+                  className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] px-3 py-1.5 text-sm"
+                >
+                  {PROFILES.map((p) => (
+                    <option key={p.id} value={p.id}>{p.label}</option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-[var(--color-muted)]">
+                Profiles tune detection thresholds and the default list of SaaS endpoints to probe (payment processors for POS, voice/cloud APIs for Smart Home, collaboration tools for Office).
+              </p>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Device watchlist
+            </h3>
+            <p className="mb-2 text-xs text-[var(--color-muted)]">
+              MAC addresses (one per line) of critical devices — POS terminals, kitchen printers, NVRs. Watched devices fire a <span className="font-mono">critical</span> finding when offline.
+            </p>
+            <textarea
+              value={(draft.watchlist ?? []).join("\n")}
+              onChange={(e) =>
+                update({
+                  watchlist: e.target.value
+                    .split(/\r?\n/)
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={4}
+              placeholder="aa:bb:cc:dd:ee:ff"
+              className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] px-3 py-2 text-sm font-mono"
+            />
+          </section>
+
+          <section>
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Service reachability targets
+            </h3>
+            <p className="mb-2 text-xs text-[var(--color-muted)]">
+              <span className="font-mono">host:port</span> per line. Leave empty to use the selected profile's defaults.
+            </p>
+            <textarea
+              value={(draft.pos_targets ?? []).join("\n")}
+              onChange={(e) =>
+                update({
+                  pos_targets: e.target.value
+                    .split(/\r?\n/)
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                })
+              }
+              rows={5}
+              placeholder="api.clover.com:443"
+              className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] px-3 py-2 text-sm font-mono"
+            />
+            <div className="mt-2 flex justify-end">
+              <button
+                onClick={() => update({ pos_targets: [] })}
+                className="text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)] underline"
+              >
+                Reset to profile defaults
+              </button>
             </div>
           </section>
 

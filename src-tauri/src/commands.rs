@@ -25,10 +25,17 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
     let link = collector.link_stats().await.map_err(|e| e.to_string())?;
     let reach = collector.reachability().await.map_err(|e| e.to_string())?;
 
-    let mut devices = crate::discovery::scan::discover_and_probe().await;
+    // Load settings to drive profile-specific behaviour.
+    let settings = Settings::load(&state.settings_path).unwrap_or_default();
+    let profile = profile_hints_from(&settings);
+    let targets = effective_targets(&settings);
+
+    // LAN discovery + SaaS probes can run concurrently.
+    let (mut devices, services) = tokio::join!(
+        crate::discovery::scan::discover_and_probe(),
+        crate::probes::services::probe_services(&targets),
+    );
     if devices.is_empty() {
-        // Fall back to demo data so the UI is never empty (and so non-macOS
-        // platforms can still see what the app does).
         devices = demo_devices();
     }
 
@@ -36,6 +43,8 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
         link: &link,
         reach: &reach,
         devices: &devices,
+        services: &services,
+        profile,
     });
     let recommendations = detect::collect_recommendations(&findings);
 
@@ -48,15 +57,34 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
         devices,
         findings,
         recommendations,
+        service_reachability: services,
     };
 
-    // Persist for history / incident-timeline correlation. We never fail the
-    // scan if the write fails — the user still sees their results.
     if let Err(e) = state.store.record_scan(&result) {
         eprintln!("warning: failed to persist scan: {e:#}");
     }
 
     Ok(result)
+}
+
+/// Build the ProfileHints struct used by the detection engine from current Settings.
+pub fn profile_hints_from(settings: &Settings) -> detect::ProfileHints {
+    detect::ProfileHints {
+        watchlist: settings.watchlist.clone(),
+        service_high_latency_ms: crate::profiles::high_latency_threshold_ms(
+            &settings.industry_profile,
+        ),
+    }
+}
+
+/// Return the list of `host:port` targets to probe, falling back to the
+/// profile defaults if the user hasn't customised them.
+pub fn effective_targets(settings: &Settings) -> Vec<String> {
+    if !settings.pos_targets.is_empty() {
+        settings.pos_targets.clone()
+    } else {
+        crate::profiles::default_targets_for(&settings.industry_profile)
+    }
 }
 
 #[tauri::command]

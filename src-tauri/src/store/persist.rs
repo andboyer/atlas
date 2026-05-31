@@ -488,6 +488,7 @@ mod tests {
             devices,
             findings,
             recommendations: vec![],
+            service_reachability: vec![],
         }
     }
 

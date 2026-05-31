@@ -74,6 +74,13 @@ export interface Recommendation {
   auto_fix_available: boolean;
 }
 
+export interface ServiceProbe {
+  target: string;
+  reachable: boolean;
+  latency_ms: number | null;
+  error: string | null;
+}
+
 export interface ScanResult {
   run_id: string;
   started_at: string;
@@ -83,6 +90,7 @@ export interface ScanResult {
   devices: DeviceInfo[];
   findings: Finding[];
   recommendations: Recommendation[];
+  service_reachability: ServiceProbe[];
 }
 
 export interface ScanSummary {
@@ -125,4 +133,7 @@ export interface Settings {
   llm_api_key: string | null;
   llm_model: string | null;
   llm_base_url: string | null;
+  industry_profile: string;
+  watchlist: string[];
+  pos_targets: string[];
 }

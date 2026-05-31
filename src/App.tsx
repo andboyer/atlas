@@ -4,6 +4,7 @@ import { StatusCard } from "./components/StatusCard";
 import { FindingsList } from "./components/FindingsList";
 import { DeviceList } from "./components/DeviceList";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useApp } from "./store";
 
@@ -62,6 +63,15 @@ function App() {
           </h2>
           <FindingsList />
         </section>
+
+        {(mode === "pro" || mode === "admin") && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Service reachability
+            </h2>
+            <ServiceStatus />
+          </section>
+        )}
 
         {(mode === "pro" || mode === "admin") && (
           <section>

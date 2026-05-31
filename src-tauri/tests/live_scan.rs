@@ -33,7 +33,7 @@ async fn live_macos_full_scan() {
 #[ignore]
 async fn live_macos_findings() {
     use wifi_troubleshooter_lib::detect;
-    use wifi_troubleshooter_lib::detect::Context;
+    use wifi_troubleshooter_lib::detect::{Context, ProfileHints};
     let c = wifi_troubleshooter_lib::collectors::default_collector();
     let link = c.link_stats().await.expect("link stats");
     let reach = c.reachability().await.expect("reachability");
@@ -42,6 +42,8 @@ async fn live_macos_findings() {
         link: &link,
         reach: &reach,
         devices: &devices,
+        services: &[],
+        profile: ProfileHints::default(),
     });
     let recs = detect::collect_recommendations(&findings);
     println!("\n=== {} FINDINGS ===", findings.len());

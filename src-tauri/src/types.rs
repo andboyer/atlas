@@ -111,6 +111,14 @@ pub struct Recommendation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceProbe {
+    pub target: String,
+    pub reachable: bool,
+    pub latency_ms: Option<f32>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanResult {
     pub run_id: String,
     pub started_at: DateTime<Utc>,
@@ -120,4 +128,6 @@ pub struct ScanResult {
     pub devices: Vec<DeviceInfo>,
     pub findings: Vec<Finding>,
     pub recommendations: Vec<Recommendation>,
+    #[serde(default)]
+    pub service_reachability: Vec<ServiceProbe>,
 }

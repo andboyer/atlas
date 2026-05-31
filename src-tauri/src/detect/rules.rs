@@ -24,9 +24,13 @@ pub fn all_rules() -> Vec<Rule> {
         // ── POS-specific ──
         rule_pos_terminal_offline,
         rule_pos_printer_break,
+        rule_pos_processor_unreachable,
+        rule_pos_processor_high_latency,
         // ── IoT-specific ──
         rule_iot_dropouts_2_4ghz,
         rule_iot_majority_offline,
+        // ── User watchlist ──
+        rule_watched_device_offline,
     ]
 }
 
@@ -502,6 +506,101 @@ fn rule_iot_majority_offline(ctx: &Context) -> Option<RuleHit> {
     }
 }
 
+// ─────────────────────────── POS service & watchlist rules ───────────────────────────
+
+fn rule_pos_processor_unreachable(ctx: &Context) -> Option<RuleHit> {
+    if ctx.services.is_empty() {
+        return None;
+    }
+    let down: Vec<&str> = ctx
+        .services
+        .iter()
+        .filter(|s| !s.reachable)
+        .map(|s| s.target.as_str())
+        .collect();
+    if down.is_empty() {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "pos.processor_unreachable",
+        title: format!("{} payment / SaaS endpoint(s) unreachable", down.len()),
+        severity: Severity::High,
+        confidence: 0.95,
+        evidence: down.iter().map(|s| format!("Cannot reach {s}")).collect(),
+        affected_devices: vec![],
+        recommendation_id: Some("rec.pos_processor_path"),
+    })
+}
+
+fn rule_pos_processor_high_latency(ctx: &Context) -> Option<RuleHit> {
+    if ctx.services.is_empty() {
+        return None;
+    }
+    let threshold = ctx.profile.service_high_latency_ms;
+    let slow: Vec<(&str, f32)> = ctx
+        .services
+        .iter()
+        .filter_map(|s| s.latency_ms.map(|ms| (s.target.as_str(), ms)))
+        .filter(|(_, ms)| *ms > threshold)
+        .collect();
+    if slow.is_empty() {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "pos.processor_high_latency",
+        title: format!("{} payment / SaaS endpoint(s) responding slowly", slow.len()),
+        severity: Severity::Medium,
+        confidence: 0.8,
+        evidence: slow
+            .iter()
+            .map(|(t, ms)| format!("{t} took {ms:.0} ms (threshold {threshold:.0})"))
+            .collect(),
+        affected_devices: vec![],
+        recommendation_id: Some("rec.pos_processor_path"),
+    })
+}
+
+fn rule_watched_device_offline(ctx: &Context) -> Option<RuleHit> {
+    if ctx.profile.watchlist.is_empty() {
+        return None;
+    }
+    let watch: std::collections::HashSet<String> = ctx
+        .profile
+        .watchlist
+        .iter()
+        .map(|m| m.to_lowercase())
+        .collect();
+    let offline: Vec<&crate::types::DeviceInfo> = ctx
+        .devices
+        .iter()
+        .filter(|d| !d.online && watch.contains(&d.mac.to_lowercase()))
+        .collect();
+    if offline.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = offline
+        .iter()
+        .map(|d| {
+            d.hostname
+                .clone()
+                .or_else(|| d.vendor.clone())
+                .unwrap_or_else(|| d.mac.clone())
+        })
+        .collect();
+    Some(RuleHit {
+        rule_id: "watch.device_offline",
+        title: format!("{} pinned device(s) offline", offline.len()),
+        severity: Severity::Critical,
+        confidence: 0.99,
+        evidence: names
+            .iter()
+            .map(|n| format!("{n} is not responding"))
+            .collect(),
+        affected_devices: offline.iter().map(|d| d.mac.clone()).collect(),
+        recommendation_id: Some("rec.investigate_device"),
+    })
+}
+
 #[cfg(test)]
 impl std::fmt::Debug for RuleHit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -515,7 +614,8 @@ impl std::fmt::Debug for RuleHit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{DeviceInfo, LinkStats, ReachabilityStats};
+    use crate::detect::ProfileHints;
+    use crate::types::{DeviceInfo, LinkStats, ReachabilityStats, ServiceProbe};
     use chrono::Utc;
 
     fn empty_link() -> LinkStats {
@@ -569,6 +669,8 @@ mod tests {
             link: &empty_link(),
             reach: &r,
             devices: &[],
+            services: &[],
+            profile: ProfileHints::default(),
         };
         assert!(rule_no_gateway(&ctx).is_some());
     }
@@ -581,6 +683,8 @@ mod tests {
             link: &empty_link(),
             reach: &r,
             devices: &[],
+            services: &[],
+            profile: ProfileHints::default(),
         };
         assert!(rule_upstream_only_high(&ctx).is_some());
     }
@@ -593,6 +697,8 @@ mod tests {
             link: &empty_link(),
             reach: &r,
             devices: &[],
+            services: &[],
+            profile: ProfileHints::default(),
         };
         assert!(rule_internet_unreachable(&ctx).is_some());
     }
@@ -612,6 +718,8 @@ mod tests {
             link: &empty_link(),
             reach: &good_reach(),
             devices: &devices,
+            services: &[],
+            profile: ProfileHints::default(),
         };
         assert!(rule_pos_printer_break(&ctx).is_some());
     }
@@ -632,6 +740,8 @@ mod tests {
             link: &empty_link(),
             reach: &good_reach(),
             devices: &devices,
+            services: &[],
+            profile: ProfileHints::default(),
         };
         assert!(rule_ap_overload(&ctx).is_some());
     }
@@ -648,6 +758,8 @@ mod tests {
             link: &empty_link(),
             reach: &good_reach(),
             devices: &devices,
+            services: &[],
+            profile: ProfileHints::default(),
         };
         assert!(rule_slow_device(&ctx).is_some());
     }
@@ -663,6 +775,8 @@ mod tests {
             link: &empty_link(),
             reach: &good_reach(),
             devices: &devices,
+            services: &[],
+            profile: ProfileHints::default(),
         };
         assert!(rule_iot_majority_offline(&ctx).is_some());
     }
@@ -685,9 +799,101 @@ mod tests {
                 true,
                 Some(4.0),
             )],
+            services: &[],
+            profile: ProfileHints::default(),
         };
         let hits: Vec<_> = all_rules().iter().filter_map(|r| r(&ctx)).collect();
         assert!(hits.is_empty(), "expected no findings, got {hits:?}");
+    }
+
+    #[test]
+    fn pos_processor_unreachable_fires_for_failed_target() {
+        let services = vec![
+            ServiceProbe {
+                target: "api.clover.com:443".into(),
+                reachable: false,
+                latency_ms: None,
+                error: Some("timeout".into()),
+            },
+            ServiceProbe {
+                target: "connect.squareup.com:443".into(),
+                reachable: true,
+                latency_ms: Some(45.0),
+                error: None,
+            },
+        ];
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &[],
+            services: &services,
+            profile: ProfileHints::default(),
+        };
+        let hit = rule_pos_processor_unreachable(&ctx).expect("should fire");
+        assert_eq!(hit.rule_id, "pos.processor_unreachable");
+        assert!(hit.evidence.iter().any(|e| e.contains("clover.com")));
+    }
+
+    #[test]
+    fn pos_processor_high_latency_uses_profile_threshold() {
+        let services = vec![ServiceProbe {
+            target: "api.clover.com:443".into(),
+            reachable: true,
+            latency_ms: Some(800.0),
+            error: None,
+        }];
+        let profile = ProfileHints {
+            watchlist: vec![],
+            service_high_latency_ms: 600.0,
+        };
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &[],
+            services: &services,
+            profile,
+        };
+        let hit = rule_pos_processor_high_latency(&ctx).expect("should fire");
+        assert_eq!(hit.rule_id, "pos.processor_high_latency");
+    }
+
+    #[test]
+    fn watched_device_offline_fires_critical() {
+        let devices = vec![
+            dev("aa:bb:cc:dd:ee:01", DeviceClass::PosTerminal, false, None),
+            dev("11:22:33:44:55:66", DeviceClass::Laptop, true, Some(5.0)),
+        ];
+        let profile = ProfileHints {
+            watchlist: vec!["AA:BB:CC:DD:EE:01".to_string()],
+            service_high_latency_ms: 1000.0,
+        };
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &devices,
+            services: &[],
+            profile,
+        };
+        let hit = rule_watched_device_offline(&ctx).expect("should fire");
+        assert_eq!(hit.severity, Severity::Critical);
+        assert_eq!(hit.affected_devices, vec!["aa:bb:cc:dd:ee:01"]);
+    }
+
+    #[test]
+    fn watched_device_does_not_fire_when_online() {
+        let devices = vec![dev("aa:bb:cc:dd:ee:01", DeviceClass::PosTerminal, true, Some(3.0))];
+        let profile = ProfileHints {
+            watchlist: vec!["aa:bb:cc:dd:ee:01".to_string()],
+            service_high_latency_ms: 1000.0,
+        };
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &devices,
+            services: &[],
+            profile,
+        };
+        assert!(rule_watched_device_offline(&ctx).is_none());
     }
 }
 
