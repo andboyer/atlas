@@ -1,6 +1,6 @@
 pub mod collectors;
 mod commands;
-mod detect;
+pub mod detect;
 pub mod discovery;
 pub mod probes;
 mod recommend;

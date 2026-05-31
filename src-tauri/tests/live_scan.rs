@@ -27,3 +27,38 @@ async fn live_macos_full_scan() {
         );
     }
 }
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn live_macos_findings() {
+    use wifi_troubleshooter_lib::detect;
+    use wifi_troubleshooter_lib::detect::Context;
+    let c = wifi_troubleshooter_lib::collectors::default_collector();
+    let link = c.link_stats().await.expect("link stats");
+    let reach = c.reachability().await.expect("reachability");
+    let devices = wifi_troubleshooter_lib::discovery::scan::discover_and_probe().await;
+    let findings = detect::evaluate(&Context {
+        link: &link,
+        reach: &reach,
+        devices: &devices,
+    });
+    let recs = detect::collect_recommendations(&findings);
+    println!("\n=== {} FINDINGS ===", findings.len());
+    for f in &findings {
+        println!(
+            "  [{:?}] {} — {} ({} affected)",
+            f.severity,
+            f.rule_id,
+            f.title,
+            f.affected_devices.len()
+        );
+        for ev in &f.evidence {
+            println!("      • {ev}");
+        }
+    }
+    println!("\n=== {} RECOMMENDATIONS ===", recs.len());
+    for r in &recs {
+        println!("  {} — {}", r.id, r.title);
+    }
+}
