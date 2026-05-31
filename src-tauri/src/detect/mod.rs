@@ -1,0 +1,68 @@
+use crate::types::{
+    DeviceClass, DeviceInfo, Finding, LinkStats, ReachabilityStats, Recommendation, Severity,
+};
+use chrono::Utc;
+use uuid::Uuid;
+
+pub mod rules;
+
+pub struct Context<'a> {
+    pub link: &'a LinkStats,
+    pub reach: &'a ReachabilityStats,
+    pub devices: &'a [DeviceInfo],
+}
+
+pub struct RuleHit {
+    pub rule_id: &'static str,
+    pub title: String,
+    pub severity: Severity,
+    pub confidence: f32,
+    pub evidence: Vec<String>,
+    pub affected_devices: Vec<String>,
+    pub recommendation_id: Option<&'static str>,
+}
+
+pub fn evaluate(ctx: &Context) -> Vec<Finding> {
+    let now = Utc::now();
+    rules::all_rules()
+        .iter()
+        .filter_map(|rule| rule(ctx))
+        .map(|hit| Finding {
+            id: Uuid::new_v4().to_string(),
+            rule_id: hit.rule_id.to_string(),
+            title: hit.title,
+            severity: hit.severity,
+            confidence: hit.confidence,
+            evidence: hit.evidence,
+            affected_devices: hit.affected_devices,
+            recommendation_id: hit.recommendation_id.map(|s| s.to_string()),
+            observed_at: now,
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+pub fn devices_in_class<'a>(
+    devices: &'a [DeviceInfo],
+    class: &DeviceClass,
+) -> impl Iterator<Item = &'a DeviceInfo> {
+    let target = std::mem::discriminant(class);
+    devices
+        .iter()
+        .filter(move |d| std::mem::discriminant(&d.class) == target)
+}
+
+pub fn collect_recommendations(findings: &[Finding]) -> Vec<Recommendation> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for f in findings {
+        if let Some(rid) = &f.recommendation_id {
+            if seen.insert(rid.clone()) {
+                if let Some(rec) = crate::recommend::lookup(rid) {
+                    out.push(rec);
+                }
+            }
+        }
+    }
+    out
+}

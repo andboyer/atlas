@@ -1,0 +1,84 @@
+export type Severity = "info" | "low" | "medium" | "high" | "critical";
+
+export type UserMode = "simple" | "pro" | "admin";
+
+export interface LinkStats {
+  ssid: string | null;
+  bssid: string | null;
+  band: "2.4" | "5" | "6" | null;
+  channel: number | null;
+  channel_width_mhz: number | null;
+  rssi_dbm: number | null;
+  noise_dbm: number | null;
+  snr_db: number | null;
+  tx_rate_mbps: number | null;
+  rx_rate_mbps: number | null;
+  security: string | null;
+}
+
+export interface ReachabilityStats {
+  gateway_ip: string | null;
+  gateway_latency_ms: number | null;
+  internet_latency_ms: number | null;
+  dns_latency_ms: number | null;
+  packet_loss_pct: number | null;
+}
+
+export interface DeviceInfo {
+  mac: string;
+  ip: string | null;
+  hostname: string | null;
+  vendor: string | null;
+  class: DeviceClass;
+  first_seen: string;
+  last_seen: string;
+  online: boolean;
+  latency_ms: number | null;
+}
+
+export type DeviceClass =
+  | "pos_terminal"
+  | "ip_camera"
+  | "smart_home"
+  | "printer"
+  | "voice_assistant"
+  | "thermostat"
+  | "phone"
+  | "laptop"
+  | "tv_streamer"
+  | "game_console"
+  | "nas"
+  | "router_ap"
+  | "unknown";
+
+export interface Finding {
+  id: string;
+  rule_id: string;
+  title: string;
+  severity: Severity;
+  confidence: number;
+  evidence: string[];
+  affected_devices: string[];
+  recommendation_id: string | null;
+  observed_at: string;
+}
+
+export interface Recommendation {
+  id: string;
+  title: string;
+  summary: string;
+  steps: string[];
+  links: { label: string; url: string }[];
+  auto_fix_available: boolean;
+}
+
+export interface ScanResult {
+  run_id: string;
+  started_at: string;
+  finished_at: string;
+  link: LinkStats;
+  reachability: ReachabilityStats;
+  devices: DeviceInfo[];
+  findings: Finding[];
+  recommendations: Recommendation[];
+}
