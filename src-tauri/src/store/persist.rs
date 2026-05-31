@@ -473,6 +473,7 @@ mod tests {
             last_seen: now,
             online,
             latency_ms: if online { Some(5.0) } else { None },
+            services: vec![],
         }
     }
 

@@ -556,6 +556,7 @@ mod tests {
             last_seen: now,
             online,
             latency_ms: latency,
+            services: vec![],
         }
     }
 

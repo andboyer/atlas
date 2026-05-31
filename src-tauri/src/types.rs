@@ -64,6 +64,9 @@ pub struct DeviceInfo {
     pub last_seen: DateTime<Utc>,
     pub online: bool,
     pub latency_ms: Option<f32>,
+    /// mDNS service types advertised by this device (e.g. "_ipp._tcp", "_airplay._tcp").
+    #[serde(default)]
+    pub services: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

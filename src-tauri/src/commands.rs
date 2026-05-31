@@ -114,6 +114,7 @@ fn mock_devices() -> Vec<DeviceInfo> {
             last_seen: now,
             online: true,
             latency_ms: Some(1.8),
+            services: vec![],
         },
         DeviceInfo {
             mac: "00:1a:7d:da:71:11".into(),
@@ -125,6 +126,7 @@ fn mock_devices() -> Vec<DeviceInfo> {
             last_seen: now,
             online: false,
             latency_ms: None,
+            services: vec![],
         },
         DeviceInfo {
             mac: "b8:27:eb:00:00:aa".into(),
@@ -136,6 +138,7 @@ fn mock_devices() -> Vec<DeviceInfo> {
             last_seen: now,
             online: true,
             latency_ms: Some(6.4),
+            services: vec!["_ipp._tcp".into(), "_ipps._tcp".into()],
         },
         DeviceInfo {
             mac: "ec:fa:bc:55:66:77".into(),
@@ -147,6 +150,7 @@ fn mock_devices() -> Vec<DeviceInfo> {
             last_seen: now,
             online: false,
             latency_ms: None,
+            services: vec![],
         },
         DeviceInfo {
             mac: "d8:f1:5b:aa:bb:cc".into(),
@@ -158,6 +162,7 @@ fn mock_devices() -> Vec<DeviceInfo> {
             last_seen: now,
             online: true,
             latency_ms: Some(38.1),
+            services: vec![],
         },
     ]
 }

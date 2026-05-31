@@ -34,6 +34,8 @@ export interface DeviceInfo {
   last_seen: string;
   online: boolean;
   latency_ms: number | null;
+  /** mDNS service types advertised by this device, e.g. ["_ipp._tcp", "_airplay._tcp"] */
+  services: string[];
 }
 
 export type DeviceClass =

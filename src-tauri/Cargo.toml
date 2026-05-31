@@ -29,8 +29,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 once_cell = "1"
 parking_lot = "0.12"
 
-# Phase 2 deps (LAN discovery, probes, HTTP) will be added when their
-# collectors land. Kept out of Phase 1 to keep first build fast & portable.
+mdns-sd = "0.11"
 
 [profile.release]
 opt-level = 3

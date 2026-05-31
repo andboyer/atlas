@@ -1,17 +1,30 @@
-use crate::discovery::{arp, classify::classify, oui::vendor_for_mac};
+use crate::discovery::{arp, classify::classify, mdns, oui::vendor_for_mac};
 use crate::probes::reachability::ping;
-use crate::types::DeviceInfo;
+use crate::types::{DeviceClass, DeviceInfo};
 use chrono::Utc;
+use std::collections::HashMap;
 use std::net::IpAddr;
+use std::time::Duration;
 use tokio::task::JoinSet;
 
-/// Discover devices via ARP, enrich with vendor + classification, and run a
-/// short per-device latency probe. Returns devices sorted by IP.
+/// Discover devices via ARP, enrich with vendor + mDNS info + classification, and
+/// run a short per-device latency probe. Returns devices sorted by IP.
 pub async fn discover_and_probe() -> Vec<DeviceInfo> {
+    // Start mDNS browse concurrently with ARP (mDNS runs for 3s in a blocking thread).
+    let mdns_handle =
+        tokio::task::spawn_blocking(|| mdns::browse_blocking(Duration::from_secs(3)));
+
     let entries = match arp::read_arp_table().await {
         Ok(e) => e,
-        Err(_) => return vec![],
+        Err(_) => {
+            let _ = mdns_handle.await;
+            return vec![];
+        }
     };
+
+    // Await mDNS results (will already be done or close to done by now).
+    let mdns_map: HashMap<String, mdns::MdnsRecord> =
+        mdns_handle.await.unwrap_or_default();
 
     let mut set: JoinSet<DeviceInfo> = JoinSet::new();
     let now = Utc::now();
@@ -19,10 +32,40 @@ pub async fn discover_and_probe() -> Vec<DeviceInfo> {
         if is_multicast_or_broadcast(&entry.ip, &entry.mac) {
             continue;
         }
+        // Clone what we need for the async task.
+        let mdns_record = entry
+            .ip
+            .parse::<IpAddr>()
+            .ok()
+            .and_then(|ip| mdns_map.get(&ip.to_string()).cloned());
+
         set.spawn(async move {
             let vendor = vendor_for_mac(&entry.mac).map(|s| s.to_string());
-            let hostname = entry.hostname_hint.clone();
-            let class = classify(vendor.as_deref(), hostname.as_deref());
+
+            // Prefer mDNS hostname; fall back to ARP hint.
+            let hostname = mdns_record
+                .as_ref()
+                .map(|r| r.hostname.clone())
+                .or_else(|| entry.hostname_hint.clone());
+
+            // Base classification from vendor + hostname.
+            let mut class = classify(vendor.as_deref(), hostname.as_deref());
+
+            // Refine class using mDNS service types when the base class is Unknown.
+            let services: Vec<String> = mdns_record
+                .as_ref()
+                .map(|r| r.services.clone())
+                .unwrap_or_default();
+
+            if matches!(class, DeviceClass::Unknown) {
+                for svc in &services {
+                    if let Some(hint) = mdns::service_class_hint(svc) {
+                        class = refine_class(hint);
+                        break;
+                    }
+                }
+            }
+
             // 2 quick pings so an offline device doesn't block the scan.
             let latency = ping(&entry.ip, 2).await;
             let online = latency.is_some();
@@ -36,6 +79,7 @@ pub async fn discover_and_probe() -> Vec<DeviceInfo> {
                 last_seen: now,
                 online,
                 latency_ms: latency,
+                services,
             }
         });
     }
@@ -48,6 +92,18 @@ pub async fn discover_and_probe() -> Vec<DeviceInfo> {
     }
     devices.sort_by_key(ip_key);
     devices
+}
+
+fn refine_class(hint: &str) -> DeviceClass {
+    match hint {
+        "printer" => DeviceClass::Printer,
+        "tv_streamer" => DeviceClass::TvStreamer,
+        "smart_home" => DeviceClass::SmartHome,
+        "nas" => DeviceClass::Nas,
+        "laptop" => DeviceClass::Laptop,
+        "phone" => DeviceClass::Phone,
+        _ => DeviceClass::Unknown,
+    }
 }
 
 fn ip_key(d: &DeviceInfo) -> Vec<u8> {

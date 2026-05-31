@@ -17,6 +17,11 @@ const classLabels: Record<string, string> = {
   unknown: "Unknown",
 };
 
+/** Strip the leading underscore and trailing ._tcp / ._udp for display. */
+function fmtService(svc: string) {
+  return svc.replace(/^_/, "").replace(/\._tcp$/, "").replace(/\._udp$/, "");
+}
+
 export function DeviceList() {
   const devices = useApp((s) => s.lastScan?.devices ?? []);
   if (devices.length === 0) {
@@ -43,7 +48,20 @@ export function DeviceList() {
           {devices.map((d) => (
             <tr key={d.mac} className="border-t border-[var(--color-border)]">
               <td className="px-4 py-2">
-                {d.hostname ?? d.vendor ?? "Unknown device"}
+                <div>{d.hostname ?? d.vendor ?? "Unknown device"}</div>
+                {d.services.length > 0 && (
+                  <div className="mt-0.5 flex flex-wrap gap-1">
+                    {d.services.map((s) => (
+                      <span
+                        key={s}
+                        className="rounded bg-[var(--color-panel-2)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]"
+                        title={s}
+                      >
+                        {fmtService(s)}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </td>
               <td className="px-4 py-2 text-[var(--color-muted)]">
                 {classLabels[d.class] ?? d.class}
