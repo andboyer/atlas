@@ -62,13 +62,16 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
     let profile = crate::commands::profile_hints_from(&settings);
     let targets = crate::commands::effective_targets(&settings);
 
-    let (mut devices, services, captive_portal, dns_leak, mtu_bytes) = tokio::join!(
-        crate::discovery::scan::discover_and_probe(),
-        crate::probes::services::probe_services(&targets),
-        crate::probes::captive::is_captive_portal(),
-        crate::probes::dns_leak::is_dns_leak(),
-        crate::probes::mtu::discover_mtu(),
-    );
+    let (mut devices, services, captive_portal, dns_leak, mtu_bytes, nearby_aps, speed_mbps) =
+        tokio::join!(
+            crate::discovery::scan::discover_and_probe(),
+            crate::probes::services::probe_services(&targets),
+            crate::probes::captive::is_captive_portal(),
+            crate::probes::dns_leak::is_dns_leak(),
+            crate::probes::mtu::discover_mtu(),
+            crate::probes::channel_scan::scan_nearby(),
+            crate::probes::speed_test::measure_download_mbps(),
+        );
     if devices.is_empty() {
         devices = crate::commands::demo_devices();
     }
@@ -86,6 +89,8 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         captive_portal,
         dns_leak,
         mtu_bytes,
+        nearby_aps: nearby_aps.clone(),
+        speed_mbps,
     });
     let recommendations = detect::collect_recommendations(&findings);
 
@@ -102,6 +107,8 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         captive_portal,
         dns_leak,
         mtu_bytes,
+        nearby_aps,
+        speed_mbps,
     };
 
     if let Err(e) = state.store.record_scan(&result) {

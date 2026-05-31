@@ -137,4 +137,20 @@ pub struct ScanResult {
     pub dns_leak: bool,
     #[serde(default)]
     pub mtu_bytes: Option<u32>,
+    /// Nearby APs visible during this scan (used for interference analysis).
+    #[serde(default)]
+    pub nearby_aps: Vec<NearbyAp>,
+    /// Measured download speed in Mbit/s (None if probe was skipped/failed).
+    #[serde(default)]
+    pub speed_mbps: Option<f32>,
+}
+
+/// A nearby WiFi access point visible during a scan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NearbyAp {
+    pub ssid: Option<String>,
+    pub bssid: Option<String>,
+    pub channel: Option<u32>,
+    pub band: Option<String>,
+    pub rssi_dbm: Option<i32>,
 }

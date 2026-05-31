@@ -266,5 +266,44 @@ pub fn catalog() -> Vec<Recommendation> {
             ],
             &[],
         ),
+        rec(
+            "rec.co_channel_interference",
+            "Reduce co-channel interference — change your AP's channel",
+            "Multiple APs are competing on the same 2.4 GHz channel. This halves throughput and increases latency for every device on that channel.",
+            &[
+                "Log in to your router/AP admin panel and change the 2.4 GHz channel.",
+                "On 2.4 GHz, the only non-overlapping channels in most regions are 1, 6, and 11. Pick the one with the fewest neighbours.",
+                "Better yet, enable band steering (or explicitly connect to 5 GHz): it is far less congested.",
+                "If you control multiple APs: assign adjacent APs to different non-overlapping channels to minimise overlap.",
+                "Use the Channel Map in this app to see which channel has the fewest competing APs.",
+            ],
+            &[],
+        ),
+        rec(
+            "rec.channel_change",
+            "Change your AP's 2.4 GHz channel to avoid overlap",
+            "Nearby APs are on overlapping channels, causing adjacent-channel interference and reduced throughput.",
+            &[
+                "Log in to your router/AP admin panel and select a manual 2.4 GHz channel.",
+                "Choose channel 1, 6, or 11 — these are the only completely non-overlapping channels.",
+                "Scan which channel is least congested using this app's Channel Map (Admin mode) and pick that one.",
+                "Alternatively, force your devices to 5 GHz which has many non-overlapping channels (36, 40, 44, 48, …).",
+            ],
+            &[],
+        ),
+        rec(
+            "rec.slow_download",
+            "Improve slow download speed",
+            "Measured download speed is below 5 Mbit/s, which will cause slow page loads, buffering, and poor video call quality.",
+            &[
+                "Move closer to the router or AP — each metre of distance and each wall weakens the signal.",
+                "Switch from 2.4 GHz to 5 GHz: 5 GHz is faster and less congested in most homes.",
+                "Restart your router (unplug for 30 seconds). Many consumer routers degrade over days without reboots.",
+                "Check for channel congestion using this app's Channel Map and switch to a less-crowded channel.",
+                "Run a wired speed test to determine if the bottleneck is WiFi or your ISP connection.",
+                "Contact your ISP if wired speeds are also slow — this may be a WAN throttling issue.",
+            ],
+            &[],
+        ),
     ]
 }

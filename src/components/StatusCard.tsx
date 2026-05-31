@@ -8,6 +8,7 @@ export function StatusCard() {
   const rssi = lastScan?.link.rssi_dbm;
   const band = lastScan?.link.band;
   const channel = lastScan?.link.channel;
+  const speedMbps = lastScan?.speed_mbps ?? null;
   const findings = lastScan?.findings ?? [];
   const worst = findings.reduce<string>((acc, f) => {
     const order = ["info", "low", "medium", "high", "critical"];
@@ -44,6 +45,9 @@ export function StatusCard() {
                   {band && <> · {band} GHz</>}
                   {channel && <> · ch {channel}</>}
                   {typeof rssi === "number" && <> · {rssi} dBm</>}
+                  {typeof speedMbps === "number" && (
+                    <> · {speedMbps.toFixed(1)} Mbps ↓</>
+                  )}
                 </>
               ) : (
                 "Run a quick scan to inspect your WiFi link, internet path, and devices."

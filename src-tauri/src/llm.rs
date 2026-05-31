@@ -229,6 +229,8 @@ mod tests {
             captive_portal: false,
             dns_leak: false,
             mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         }
     }
 

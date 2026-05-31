@@ -9,6 +9,7 @@ import { MetricCharts } from "./components/MetricCharts";
 import { IncidentTimeline } from "./components/IncidentTimeline";
 import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
+import ChannelMap from "./components/ChannelMap";
 import { useApp } from "./store";
 
 function App() {
@@ -123,6 +124,18 @@ function App() {
               Incident timeline
             </h2>
             <IncidentTimeline />
+          </section>
+        )}
+
+        {mode === "admin" && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Channel map
+            </h2>
+            <ChannelMap
+              nearbyAps={lastScan?.nearby_aps ?? []}
+              ownChannel={lastScan?.link.channel ?? null}
+            />
           </section>
         )}
 

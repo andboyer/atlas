@@ -40,6 +40,10 @@ pub fn all_rules() -> Vec<Rule> {
         // ── DNS leak + MTU ──
         rule_dns_leak,
         rule_low_mtu,
+        // ── Channel interference + speed ──
+        rule_co_channel_interference,
+        rule_adjacent_channel_interference,
+        rule_slow_download,
     ]
 }
 
@@ -759,6 +763,125 @@ fn rule_low_mtu(ctx: &Context) -> Option<RuleHit> {
     })
 }
 
+// ─────────────────────────── Channel interference ────────────────────────────
+
+fn rule_co_channel_interference(ctx: &Context) -> Option<RuleHit> {
+    use crate::probes::channel_scan::is_co_channel_24;
+    let own_ch = ctx.link.channel?;
+    if own_ch > 14 {
+        return None; // 5 GHz co-channel is less impactful; skip for now
+    }
+    let interferers: Vec<String> = ctx
+        .nearby_aps
+        .iter()
+        .filter(|ap| {
+            ap.channel
+                .map(|c| is_co_channel_24(own_ch, c))
+                .unwrap_or(false)
+                && ap.bssid.as_deref() != ctx.link.bssid.as_deref()
+        })
+        .filter_map(|ap| {
+            let ssid = ap.ssid.as_deref().unwrap_or("unknown");
+            ap.bssid.as_ref().map(|b| format!("{ssid} ({b})"))
+        })
+        .collect();
+
+    if interferers.is_empty() {
+        return None;
+    }
+
+    Some(RuleHit {
+        rule_id: "detect.co_channel_interference",
+        title: format!(
+            "Co-channel interference on 2.4 GHz channel {own_ch} ({} neighbour AP{})",
+            interferers.len(),
+            if interferers.len() == 1 { "" } else { "s" }
+        ),
+        severity: Severity::Medium,
+        confidence: 0.80,
+        evidence: {
+            let mut ev = vec![format!(
+                "{} neighbouring AP{} share channel {own_ch} with you.",
+                interferers.len(),
+                if interferers.len() == 1 { "" } else { "s" }
+            )];
+            ev.extend(interferers.iter().take(5).cloned());
+            ev.push("Co-channel interference significantly reduces throughput and increases latency.".into());
+            ev
+        },
+        affected_devices: vec![],
+        recommendation_id: Some("rec.co_channel_interference"),
+    })
+}
+
+fn rule_adjacent_channel_interference(ctx: &Context) -> Option<RuleHit> {
+    use crate::probes::channel_scan::is_adjacent_channel_24;
+    let own_ch = ctx.link.channel?;
+    if own_ch > 14 {
+        return None;
+    }
+    let interferers: Vec<String> = ctx
+        .nearby_aps
+        .iter()
+        .filter(|ap| {
+            ap.channel
+                .map(|c| is_adjacent_channel_24(own_ch, c))
+                .unwrap_or(false)
+        })
+        .filter_map(|ap| {
+            let ssid = ap.ssid.as_deref().unwrap_or("unknown");
+            ap.bssid.as_ref().map(|b| format!("{ssid} ({b})"))
+        })
+        .collect();
+
+    if interferers.is_empty() {
+        return None;
+    }
+
+    Some(RuleHit {
+        rule_id: "detect.adjacent_channel_interference",
+        title: format!(
+            "Adjacent-channel interference near 2.4 GHz channel {own_ch}",
+        ),
+        severity: Severity::Low,
+        confidence: 0.70,
+        evidence: {
+            let mut ev = vec![format!(
+                "{} neighbouring AP{} are on overlapping channels near channel {own_ch}.",
+                interferers.len(),
+                if interferers.len() == 1 { "" } else { "s" }
+            )];
+            ev.extend(interferers.iter().take(5).cloned());
+            ev.push("Switch your AP to channel 1, 6, or 11 to avoid overlap.".into());
+            ev
+        },
+        affected_devices: vec![],
+        recommendation_id: Some("rec.channel_change"),
+    })
+}
+
+// ─────────────────────────── Slow download ───────────────────────────────────
+
+fn rule_slow_download(ctx: &Context) -> Option<RuleHit> {
+    use crate::probes::speed_test::SLOW_DOWNLOAD_THRESHOLD_MBPS;
+    let mbps = ctx.speed_mbps?;
+    if mbps >= SLOW_DOWNLOAD_THRESHOLD_MBPS {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "detect.slow_download",
+        title: format!("Slow download speed ({:.1} Mbps)", mbps),
+        severity: Severity::Medium,
+        confidence: 0.78,
+        evidence: vec![
+            format!("Measured download speed is {mbps:.1} Mbit/s (threshold: {SLOW_DOWNLOAD_THRESHOLD_MBPS} Mbit/s)."),
+            "Possible causes: low WiFi signal, channel congestion, ISP throttling, or router CPU overload.".into(),
+        ],
+        affected_devices: vec![],
+        recommendation_id: Some("rec.slow_download"),
+    })
+}
+
 #[cfg(test)]
 impl std::fmt::Debug for RuleHit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -832,7 +955,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_no_gateway(&ctx).is_some());
     }
@@ -850,7 +975,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_upstream_only_high(&ctx).is_some());
     }
@@ -868,7 +995,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_internet_unreachable(&ctx).is_some());
     }
@@ -893,7 +1022,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_pos_printer_break(&ctx).is_some());
     }
@@ -919,7 +1050,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_ap_overload(&ctx).is_some());
     }
@@ -941,7 +1074,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_slow_device(&ctx).is_some());
     }
@@ -962,7 +1097,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_iot_majority_offline(&ctx).is_some());
     }
@@ -990,7 +1127,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         let hits: Vec<_> = all_rules().iter().filter_map(|r| r(&ctx)).collect();
         assert!(hits.is_empty(), "expected no findings, got {hits:?}");
@@ -1021,7 +1160,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         let hit = rule_pos_processor_unreachable(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "pos.processor_unreachable");
@@ -1049,7 +1190,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         let hit = rule_pos_processor_high_latency(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "pos.processor_high_latency");
@@ -1074,7 +1217,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         let hit = rule_watched_device_offline(&ctx).expect("should fire");
         assert_eq!(hit.severity, Severity::Critical);
@@ -1097,7 +1242,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_watched_device_offline(&ctx).is_none());
     }
@@ -1119,7 +1266,9 @@ mod tests {
             anomalies: vec![sig],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         let hit = rule_anomaly_rssi_drop(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "anomaly.rssi_drop");
@@ -1142,7 +1291,9 @@ mod tests {
             anomalies: vec![sig],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         let hit = rule_anomaly_latency_spike(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "anomaly.latency_spike");
@@ -1159,7 +1310,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: true,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         let hit = rule_captive_portal(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "detect.captive_portal");
@@ -1176,7 +1329,9 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-            mtu_bytes: None,
+                        mtu_bytes: None,
+            nearby_aps: vec![],
+            speed_mbps: None,
         };
         assert!(rule_captive_portal(&ctx).is_none());
     }

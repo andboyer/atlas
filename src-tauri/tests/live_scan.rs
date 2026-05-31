@@ -48,6 +48,8 @@ async fn live_macos_findings() {
         captive_portal: false,
         dns_leak: false,
         mtu_bytes: None,
+        nearby_aps: vec![],
+        speed_mbps: None,
     });
     let recs = detect::collect_recommendations(&findings);
     println!("\n=== {} FINDINGS ===", findings.len());

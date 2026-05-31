@@ -95,6 +95,16 @@ export interface ScanResult {
   captive_portal: boolean;
   dns_leak: boolean;
   mtu_bytes: number | null;
+  nearby_aps: NearbyAp[];
+  speed_mbps: number | null;
+}
+
+export interface NearbyAp {
+  ssid: string | null;
+  bssid: string | null;
+  channel: number | null;
+  band: string | null;
+  rssi_dbm: number | null;
 }
 
 export interface ScanSummary {

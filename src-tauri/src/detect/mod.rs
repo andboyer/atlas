@@ -1,6 +1,6 @@
 use crate::types::{
-    DeviceClass, DeviceInfo, Finding, LinkStats, ReachabilityStats, Recommendation, ServiceProbe,
-    Severity,
+    DeviceClass, DeviceInfo, Finding, LinkStats, NearbyAp, ReachabilityStats, Recommendation,
+    ServiceProbe, Severity,
 };
 use chrono::Utc;
 use uuid::Uuid;
@@ -34,6 +34,10 @@ pub struct Context<'a> {
     pub dns_leak: bool,
     /// Effective path MTU discovered via ping DF-bit probing (None if unavailable).
     pub mtu_bytes: Option<u32>,
+    /// Nearby APs scanned during this run (used for channel interference rules).
+    pub nearby_aps: Vec<NearbyAp>,
+    /// Measured download speed in Mbit/s (None if speed test skipped/failed).
+    pub speed_mbps: Option<f32>,
 }
 
 pub struct RuleHit {
