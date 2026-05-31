@@ -40,10 +40,10 @@ pub fn run() {
                 settings_path,
                 monitor_handle: Mutex::new(None),
             });
-            #[cfg(debug_assertions)]
-            {
-                let window = app.get_webview_window("main").unwrap();
-                window.open_devtools();
+            // Bring the window to the foreground (needed on macOS when launched from terminal)
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+                let _ = window.show();
             }
             Ok(())
         })
