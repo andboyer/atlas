@@ -34,6 +34,7 @@ pub fn run() {
             commands::get_recent_scans,
             commands::get_device_events,
             commands::get_recent_device_events,
+            commands::get_incident_correlation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 
@@ -23,6 +23,29 @@ pub struct ScanSummary {
     pub devices_online: i64,
     pub devices_total: i64,
     pub worst_severity: Option<Severity>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricSample {
+    pub metric: String,
+    pub value: f64,
+    pub sampled_at: DateTime<Utc>,
+    pub label: Option<String>,
+}
+
+/// A snapshot of network conditions around an incident time. Used to power
+/// the "what was happening on the LAN when this device dropped" view, which
+/// is the core differentiator for diagnosing POS-terminal random disconnects
+/// and IoT dropouts.
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentCorrelation {
+    pub at: DateTime<Utc>,
+    pub window_secs: i64,
+    /// Most recent value of each metric inside the window leading up to `at`.
+    pub metrics_before: Vec<MetricSample>,
+    /// Device events from OTHER devices that occurred inside the window
+    /// (i.e. anything that went up or down at roughly the same time).
+    pub concurrent_events: Vec<DeviceEvent>,
 }
 
 impl super::Store {
@@ -274,6 +297,67 @@ impl super::Store {
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
+
+    /// Pull a snapshot of network state around `at`. Returns the most recent
+    /// value of each metric within `window_secs` BEFORE `at`, plus any
+    /// device transitions (other MACs) within ±window_secs.
+    pub fn correlate(
+        &self,
+        at: DateTime<Utc>,
+        window_secs: i64,
+        exclude_mac: Option<&str>,
+    ) -> Result<IncidentCorrelation> {
+        let guard = self.conn.lock();
+        let window = Duration::seconds(window_secs);
+        let lower = (at - window).to_rfc3339();
+        let upper = (at + window).to_rfc3339();
+        let at_iso = at.to_rfc3339();
+
+        // Latest sample per metric, before `at`, inside the window.
+        let mut metrics_stmt = guard.prepare(
+            "SELECT s1.metric, s1.value, s1.sampled_at, s1.label \
+             FROM samples s1 \
+             JOIN ( \
+                 SELECT metric, MAX(sampled_at) AS sampled_at \
+                 FROM samples \
+                 WHERE sampled_at >= ?1 AND sampled_at <= ?2 \
+                 GROUP BY metric \
+             ) s2 ON s1.metric = s2.metric AND s1.sampled_at = s2.sampled_at",
+        )?;
+        let metrics_rows = metrics_stmt.query_map(params![lower, at_iso], |r| {
+            Ok(MetricSample {
+                metric: r.get(0)?,
+                value: r.get(1)?,
+                sampled_at: parse_dt(&r.get::<_, String>(2)?),
+                label: r.get(3)?,
+            })
+        })?;
+        let metrics_before: Vec<MetricSample> = metrics_rows.collect::<Result<Vec<_>, _>>()?;
+        drop(metrics_stmt);
+
+        // Other devices that flipped state inside ±window_secs.
+        let mut events_stmt = guard.prepare(
+            "SELECT mac, occurred_at, event_type, details FROM device_events \
+             WHERE occurred_at >= ?1 AND occurred_at <= ?2 AND mac != COALESCE(?3, '') \
+             ORDER BY occurred_at ASC",
+        )?;
+        let event_rows = events_stmt.query_map(params![lower, upper, exclude_mac], |r| {
+            Ok(DeviceEvent {
+                mac: r.get(0)?,
+                occurred_at: parse_dt(&r.get::<_, String>(1)?),
+                event_type: r.get(2)?,
+                details: r.get(3)?,
+            })
+        })?;
+        let concurrent_events = event_rows.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(IncidentCorrelation {
+            at,
+            window_secs,
+            metrics_before,
+            concurrent_events,
+        })
+    }
 }
 
 #[derive(Debug, Default, Serialize, serde::Deserialize)]
@@ -474,5 +558,57 @@ mod tests {
         assert_eq!(summaries[0].devices_online, 1);
         assert_eq!(summaries[0].devices_total, 2);
         assert_eq!(summaries[0].worst_severity, Some(Severity::High));
+    }
+
+    #[test]
+    fn correlate_returns_metrics_and_concurrent_events() {
+        let store = Store::in_memory().unwrap();
+        // Scan 1: POS up, camera up.
+        store
+            .record_scan(&scan_with(
+                vec![
+                    dev("aa:aa:aa:aa:aa:06", true),
+                    dev("bb:bb:bb:bb:bb:06", true),
+                ],
+                vec![],
+            ))
+            .unwrap();
+        // Scan 2: both drop at roughly the same time -> incident.
+        store
+            .record_scan(&scan_with(
+                vec![
+                    dev("aa:aa:aa:aa:aa:06", false),
+                    dev("bb:bb:bb:bb:bb:06", false),
+                ],
+                vec![],
+            ))
+            .unwrap();
+
+        // Look up correlation around the POS terminal's drop.
+        let pos_events = store.device_events_for("aa:aa:aa:aa:aa:06", 10).unwrap();
+        let drop_event = pos_events
+            .iter()
+            .find(|e| e.event_type == "offline")
+            .expect("pos went offline");
+        let snap = store
+            .correlate(drop_event.occurred_at, 60, Some("aa:aa:aa:aa:aa:06"))
+            .unwrap();
+        // We should see the gateway latency / link RSSI metrics that we
+        // recorded with scan 2.
+        assert!(
+            snap.metrics_before
+                .iter()
+                .any(|m| m.metric == "reach.gateway_ms"),
+            "expected gateway sample, got {:?}",
+            snap.metrics_before
+        );
+        // The camera's offline event should appear as a concurrent event.
+        assert!(
+            snap.concurrent_events
+                .iter()
+                .any(|e| e.mac == "bb:bb:bb:bb:bb:06" && e.event_type == "offline"),
+            "expected camera concurrent offline, got {:?}",
+            snap.concurrent_events
+        );
     }
 }

@@ -1,8 +1,8 @@
 use crate::collectors::default_collector;
 use crate::detect::{self, Context};
-use crate::store::{DeviceEvent, ScanSummary, Store};
+use crate::store::{DeviceEvent, IncidentCorrelation, ScanSummary, Store};
 use crate::types::{DeviceClass, DeviceInfo, ScanResult};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use tauri::State;
 use uuid::Uuid;
 
@@ -82,6 +82,22 @@ pub async fn get_recent_device_events(
     state
         .store
         .recent_device_events(limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_incident_correlation(
+    state: State<'_, AppState>,
+    at: String,
+    window_secs: Option<i64>,
+    exclude_mac: Option<String>,
+) -> Result<IncidentCorrelation, String> {
+    let parsed = DateTime::parse_from_rfc3339(&at)
+        .map_err(|e| format!("invalid timestamp: {e}"))?
+        .with_timezone(&Utc);
+    state
+        .store
+        .correlate(parsed, window_secs.unwrap_or(120), exclude_mac.as_deref())
         .map_err(|e| e.to_string())
 }
 

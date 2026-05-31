@@ -1,7 +1,7 @@
 pub mod persist;
 pub mod schema;
 
-pub use persist::{DeviceEvent, ScanSummary};
+pub use persist::{DeviceEvent, IncidentCorrelation, ScanSummary};
 
 use anyhow::Result;
 use parking_lot::Mutex;

@@ -99,3 +99,17 @@ export interface DeviceEvent {
   event_type: "first_seen" | "online" | "offline" | string;
   details: string | null;
 }
+
+export interface MetricSample {
+  metric: string;
+  value: number;
+  sampled_at: string;
+  label: string | null;
+}
+
+export interface IncidentCorrelation {
+  at: string;
+  window_secs: number;
+  metrics_before: MetricSample[];
+  concurrent_events: DeviceEvent[];
+}
