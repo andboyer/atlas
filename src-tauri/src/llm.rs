@@ -56,20 +56,27 @@ fn build_prompt(scan: &ScanResult) -> String {
     lines.join("\n")
 }
 
+/// A single message in a chat conversation.
+#[derive(Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
 // ── OpenAI ───────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct OaiRequest<'a> {
     model: &'a str,
-    messages: Vec<OaiMessage<'a>>,
+    messages: Vec<OaiMessageOwned>,
     max_tokens: u32,
     temperature: f32,
 }
 
 #[derive(Serialize)]
-struct OaiMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct OaiMessageOwned {
+    role: String,
+    content: String,
 }
 
 #[derive(Deserialize)]
@@ -87,14 +94,14 @@ struct OaiChoiceMessage {
     content: String,
 }
 
-async fn call_openai(api_key: &str, model: &str, base_url: Option<&str>, prompt: &str) -> Result<String> {
+async fn call_openai(api_key: &str, model: &str, base_url: Option<&str>, messages: &[ChatMessage]) -> Result<String> {
     let url = format!(
         "{}/v1/chat/completions",
         base_url.unwrap_or("https://api.openai.com")
     );
     let body = OaiRequest {
         model,
-        messages: vec![OaiMessage { role: "user", content: prompt }],
+        messages: messages.iter().map(|m| OaiMessageOwned { role: m.role.clone(), content: m.content.clone() }).collect(),
         max_tokens: 800,
         temperature: 0.4,
     };
@@ -123,13 +130,14 @@ async fn call_openai(api_key: &str, model: &str, base_url: Option<&str>, prompt:
 struct AnthropicRequest<'a> {
     model: &'a str,
     max_tokens: u32,
-    messages: Vec<AnthropicMessage<'a>>,
+    system: String,
+    messages: Vec<AnthropicMessageOwned>,
 }
 
 #[derive(Serialize)]
-struct AnthropicMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct AnthropicMessageOwned {
+    role: String,
+    content: String,
 }
 
 #[derive(Deserialize)]
@@ -142,11 +150,24 @@ struct AnthropicContent {
     text: String,
 }
 
-async fn call_anthropic(api_key: &str, model: &str, prompt: &str) -> Result<String> {
+async fn call_anthropic(api_key: &str, model: &str, messages: &[ChatMessage]) -> Result<String> {
+    // Anthropic uses a top-level `system` field; user/assistant messages go in `messages`.
+    let system = messages
+        .iter()
+        .find(|m| m.role == "system")
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    let chat_messages: Vec<AnthropicMessageOwned> = messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(|m| AnthropicMessageOwned { role: m.role.clone(), content: m.content.clone() })
+        .collect();
+
     let body = AnthropicRequest {
         model,
         max_tokens: 800,
-        messages: vec![AnthropicMessage { role: "user", content: prompt }],
+        system,
+        messages: chat_messages,
     };
     let client = reqwest::Client::new();
     let resp = client
@@ -168,7 +189,29 @@ async fn call_anthropic(api_key: &str, model: &str, prompt: &str) -> Result<Stri
         .unwrap_or_default())
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry points ───────────────────────────────────────────────────────
+
+/// Build the chat messages list for a one-shot diagnostic explanation.
+fn explain_messages(scan: &ScanResult) -> Vec<ChatMessage> {
+    vec![ChatMessage { role: "user".into(), content: build_prompt(scan) }]
+}
+
+/// Build the system message that embeds diagnostic context for interactive chat.
+fn chat_system_message(scan: &ScanResult) -> ChatMessage {
+    let mut sys = "You are an expert network engineer assistant helping a user troubleshoot their WiFi and LAN.\n".to_string();
+    sys.push_str("Here is the current diagnostic context:\n\n");
+    sys.push_str(&build_prompt(scan));
+    sys.push_str("\n\nAnswer the user's follow-up questions concisely and precisely, referencing the above data.");
+    ChatMessage { role: "system".into(), content: sys }
+}
+
+/// Dispatch to the correct LLM provider with a messages list.
+async fn dispatch(provider: &str, api_key: &str, model: &str, base_url: Option<&str>, messages: &[ChatMessage]) -> Result<String> {
+    match provider {
+        "anthropic" => call_anthropic(api_key, model, messages).await,
+        _ => call_openai(api_key, model, base_url, messages).await,
+    }
+}
 
 /// Call the configured LLM with a structured summary of the scan and return
 /// a plain-language explanation.
@@ -179,13 +222,27 @@ pub async fn explain(
     base_url: Option<&str>,
     scan: &ScanResult,
 ) -> Result<String> {
-    let prompt = build_prompt(scan);
-    tracing::debug!("LLM prompt ({} chars):\n{}", prompt.len(), &prompt[..prompt.len().min(200)]);
+    let messages = explain_messages(scan);
+    tracing::debug!("LLM explain ({} chars)", messages[0].content.len());
+    dispatch(provider, api_key, model, base_url, &messages).await
+}
 
-    match provider {
-        "anthropic" => call_anthropic(api_key, model, &prompt).await,
-        _ => call_openai(api_key, model, base_url, &prompt).await,
-    }
+/// Answer a follow-up question in the context of the current scan result.
+/// `history` is alternating user/assistant messages (not including the new question).
+pub async fn chat_query(
+    provider: &str,
+    api_key: &str,
+    model: &str,
+    base_url: Option<&str>,
+    scan: &ScanResult,
+    history: Vec<ChatMessage>,
+    question: &str,
+) -> Result<String> {
+    let mut messages = vec![chat_system_message(scan)];
+    messages.extend(history);
+    messages.push(ChatMessage { role: "user".into(), content: question.to_string() });
+    tracing::debug!("LLM chat ({} msgs)", messages.len());
+    dispatch(provider, api_key, model, base_url, &messages).await
 }
 
 // ── Payload preview (returned to frontend before sending) ────────────────────

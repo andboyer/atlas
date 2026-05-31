@@ -52,6 +52,8 @@ pub fn run() {
             commands::start_monitoring,
             commands::stop_monitoring,
             commands::explain_findings,
+            commands::chat_query,
+            commands::get_payload_preview,
             commands::get_metric_history,
             commands::export_report,
         ])

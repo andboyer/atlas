@@ -224,6 +224,48 @@ pub async fn explain_findings(
         .map_err(|e| e.to_string())
 }
 
+/// A user/assistant message for the chat history sent from the frontend.
+#[derive(serde::Deserialize)]
+pub struct FrontendChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[tauri::command]
+pub async fn chat_query(
+    state: State<'_, AppState>,
+    scan_result: ScanResult,
+    history: Vec<FrontendChatMessage>,
+    question: String,
+) -> Result<String, String> {
+    let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
+
+    let provider = settings.llm_provider.as_deref().unwrap_or("openai");
+    let api_key = settings
+        .llm_api_key
+        .clone()
+        .ok_or_else(|| "No LLM API key configured. Add one in Settings.".to_string())?;
+    let model = settings
+        .llm_model
+        .clone()
+        .unwrap_or_else(|| default_model(provider));
+    let base_url = settings.llm_base_url.clone();
+
+    let llm_history: Vec<crate::llm::ChatMessage> = history
+        .into_iter()
+        .map(|m| crate::llm::ChatMessage { role: m.role, content: m.content })
+        .collect();
+
+    crate::llm::chat_query(provider, &api_key, &model, base_url.as_deref(), &scan_result, llm_history, &question)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_payload_preview(scan_result: ScanResult) -> String {
+    crate::llm::preview_payload(&scan_result)
+}
+
 fn default_model(provider: &str) -> String {
     match provider {
         "anthropic" => "claude-3-haiku-20240307".to_string(),

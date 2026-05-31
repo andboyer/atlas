@@ -10,6 +10,7 @@ import { IncidentTimeline } from "./components/IncidentTimeline";
 import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
 import ChannelMap from "./components/ChannelMap";
+import ChatPanel from "./components/ChatPanel";
 import { useApp } from "./store";
 
 function App() {
@@ -108,6 +109,12 @@ function App() {
           </h2>
           <FindingsList />
         </section>
+
+        {(mode === "pro" || mode === "admin") && lastScan && (
+          <section>
+            <ChatPanel scanResult={lastScan} />
+          </section>
+        )}
 
         {(mode === "pro" || mode === "admin") && (
           <section>
