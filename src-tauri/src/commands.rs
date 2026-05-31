@@ -1,13 +1,21 @@
 use crate::collectors::default_collector;
 use crate::detect::{self, Context};
+use crate::settings::Settings;
 use crate::store::{DeviceEvent, IncidentCorrelation, ScanSummary, Store};
 use crate::types::{DeviceClass, DeviceInfo, ScanResult};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::State;
 use uuid::Uuid;
 
 pub struct AppState {
     pub store: Store,
+    pub settings_path: PathBuf,
+    /// Stop signal for the active monitoring task (None if not running).
+    pub monitor_handle: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 #[tauri::command]
@@ -21,7 +29,7 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
     if devices.is_empty() {
         // Fall back to demo data so the UI is never empty (and so non-macOS
         // platforms can still see what the app does).
-        devices = mock_devices();
+        devices = demo_devices();
     }
 
     let findings = detect::evaluate(&Context {
@@ -101,7 +109,83 @@ pub async fn get_incident_correlation(
         .map_err(|e| e.to_string())
 }
 
-fn mock_devices() -> Vec<DeviceInfo> {
+// ── Settings ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    Settings::load(&state.settings_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_settings(
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<(), String> {
+    settings
+        .save(&state.settings_path)
+        .map_err(|e| e.to_string())
+}
+
+// ── Monitoring ────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn start_monitoring(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let interval = Settings::load(&state.settings_path)
+        .map_err(|e| e.to_string())?
+        .scan_interval_secs;
+
+    let handle = crate::monitor::start_monitoring(app, interval);
+    *state.monitor_handle.lock() = Some(handle);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_monitoring(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(handle) = state.monitor_handle.lock().take() {
+        handle.store(false, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+// ── LLM ──────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn explain_findings(
+    state: State<'_, AppState>,
+    scan_result: ScanResult,
+) -> Result<String, String> {
+    let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
+
+    let provider = settings.llm_provider.as_deref().unwrap_or("openai");
+    let api_key = settings
+        .llm_api_key
+        .clone()
+        .ok_or_else(|| "No LLM API key configured. Add one in Settings.".to_string())?;
+    let model = settings
+        .llm_model
+        .clone()
+        .unwrap_or_else(|| default_model(provider));
+    let base_url = settings.llm_base_url.clone();
+
+    crate::llm::explain(provider, &api_key, &model, base_url.as_deref(), &scan_result)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn default_model(provider: &str) -> String {
+    match provider {
+        "anthropic" => "claude-3-haiku-20240307".to_string(),
+        "ollama" => "llama3".to_string(),
+        _ => "gpt-4o-mini".to_string(),
+    }
+}
+
+// ── Demo data ─────────────────────────────────────────────────────────────────
+
+pub fn demo_devices() -> Vec<DeviceInfo> {
     let now = Utc::now();
     vec![
         DeviceInfo {

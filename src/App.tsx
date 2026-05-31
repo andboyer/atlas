@@ -1,12 +1,26 @@
+import { useEffect, useState } from "react";
 import { ModeToggle } from "./components/ModeToggle";
 import { StatusCard } from "./components/StatusCard";
 import { FindingsList } from "./components/FindingsList";
 import { DeviceList } from "./components/DeviceList";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { SettingsPanel } from "./components/SettingsPanel";
 import { useApp } from "./store";
 
 function App() {
   const mode = useApp((s) => s.mode);
+  const monitoring = useApp((s) => s.monitoring);
+  const loadSettings = useApp((s) => s.loadSettings);
+  const subscribeToScanEvents = useApp((s) => s.subscribeToScanEvents);
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    loadSettings();
+    let unsub: (() => void) | undefined;
+    subscribeToScanEvents().then((fn) => { unsub = fn; });
+    return () => { unsub?.(); };
+  }, []);
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-[var(--color-border)] bg-[var(--color-panel)]/80 backdrop-blur">
@@ -19,8 +33,23 @@ function App() {
                 AI-assisted network diagnostics
               </p>
             </div>
+            {monitoring && (
+              <span className="flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs text-emerald-300">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                monitoring
+              </span>
+            )}
           </div>
-          <ModeToggle />
+          <div className="flex items-center gap-3">
+            <ModeToggle />
+            <button
+              onClick={() => setShowSettings(true)}
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] px-3 py-1.5 text-sm text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
+              title="Settings"
+            >
+              ⚙ Settings
+            </button>
+          </div>
         </div>
       </header>
 
@@ -52,6 +81,8 @@ function App() {
           </section>
         )}
       </main>
+
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

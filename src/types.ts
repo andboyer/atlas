@@ -115,3 +115,14 @@ export interface IncidentCorrelation {
   metrics_before: MetricSample[];
   concurrent_events: DeviceEvent[];
 }
+
+export interface Settings {
+  scan_interval_secs: number;
+  monitoring_enabled: boolean;
+  notifications_enabled: boolean;
+  notification_min_severity: Severity;
+  llm_provider: string | null;
+  llm_api_key: string | null;
+  llm_model: string | null;
+  llm_base_url: string | null;
+}
