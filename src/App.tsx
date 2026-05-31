@@ -6,6 +6,7 @@ import { FindingsList } from "./components/FindingsList";
 import { DeviceList } from "./components/DeviceList";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { MetricCharts } from "./components/MetricCharts";
+import { IncidentTimeline } from "./components/IncidentTimeline";
 import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useApp } from "./store";
@@ -113,6 +114,15 @@ function App() {
               Live metrics
             </h2>
             <MetricCharts />
+          </section>
+        )}
+
+        {mode === "admin" && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Incident timeline
+            </h2>
+            <IncidentTimeline />
           </section>
         )}
 

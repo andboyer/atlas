@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   LineChart,
   Line,
@@ -52,7 +53,7 @@ function Sparkline({ config }: { config: ChartConfig }) {
   const [data, setData] = useState<MetricSample[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchData = () =>
     invoke<MetricSample[]>("get_metric_history", {
       metric: config.metric,
       limit: 30,
@@ -60,6 +61,14 @@ function Sparkline({ config }: { config: ChartConfig }) {
       .then((s) => setData(s))
       .catch(() => setData([]))
       .finally(() => setLoading(false));
+
+  useEffect(() => {
+    fetchData();
+    let unlisten: (() => void) | undefined;
+    listen("scan:completed", () => void fetchData()).then((fn) => {
+      unlisten = fn;
+    });
+    return () => { unlisten?.(); };
   }, [config.metric]);
 
   const chartData = data.map((s) => ({
