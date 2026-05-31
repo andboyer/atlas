@@ -1,9 +1,11 @@
-mod collectors;
+pub mod collectors;
 mod commands;
 mod detect;
+pub mod discovery;
+pub mod probes;
 mod recommend;
 mod store;
-mod types;
+pub mod types;
 
 use commands::AppState;
 use store::Store;

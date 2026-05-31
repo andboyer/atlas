@@ -3,6 +3,7 @@ use crate::types::{LinkStats, ReachabilityStats};
 use anyhow::Result;
 use async_trait::async_trait;
 
+#[allow(dead_code)]
 pub struct MockCollector;
 
 #[async_trait]

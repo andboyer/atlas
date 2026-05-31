@@ -18,7 +18,13 @@ pub async fn run_quick_scan(_state: State<'_, AppState>) -> Result<ScanResult, S
     let link = collector.link_stats().await.map_err(|e| e.to_string())?;
     let reach = collector.reachability().await.map_err(|e| e.to_string())?;
 
-    let devices = mock_devices();
+    let mut devices = crate::discovery::scan::discover_and_probe().await;
+    if devices.is_empty() {
+        // Fall back to demo data so the UI is never empty (and so non-macOS
+        // platforms can still see what the app does).
+        devices = mock_devices();
+    }
+
     let findings = detect::evaluate(&Context {
         link: &link,
         reach: &reach,

@@ -18,7 +18,14 @@ pub trait WifiCollector: Send + Sync {
 }
 
 pub fn default_collector() -> Box<dyn WifiCollector> {
-    // Phase 1: ship the mock collector so the app is demoable everywhere.
-    // Phase 2 will swap in the real per-OS implementation.
-    Box::new(mock::MockCollector)
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(macos::MacOsCollector)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Phase 2 ships real macOS support. Linux/Windows still use mock
+        // pending dedicated parsers in Phase 2b.
+        Box::new(mock::MockCollector)
+    }
 }
