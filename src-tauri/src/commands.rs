@@ -495,26 +495,31 @@ fn html_escape(s: &str) -> String {
 
 // ── Update check ──────────────────────────────────────────────────────────────
 
-/// Check if an application update is available.  Returns a JSON object with
-/// `available: bool` and optionally `version: String` and `body: String`.
+/// Check if an application update is available.
+/// NOTE: Requires the updater plugin to be configured with a valid pubkey for release builds.
+/// In dev mode this always returns available: false.
 #[tauri::command]
-pub async fn check_for_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    use tauri_plugin_updater::UpdaterExt;
-
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    match updater.check().await {
-        Ok(Some(update)) => Ok(serde_json::json!({
-            "available": true,
-            "version": update.version,
-            "body": update.body.unwrap_or_default(),
-        })),
-        Ok(None) => Ok(serde_json::json!({ "available": false })),
-        Err(e) => {
-            // Network errors (offline, endpoint unreachable) are non-fatal.
-            tracing::debug!("update check failed: {e}");
-            Ok(serde_json::json!({ "available": false, "error": e.to_string() }))
-        }
+pub async fn check_for_update(_app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    // The tauri-plugin-updater requires a signing pubkey which is generated at release time.
+    // Until a release keypair is configured, we return no update available.
+    #[cfg(not(debug_assertions))]
+    {
+        use tauri_plugin_updater::UpdaterExt;
+        let updater = match _app.updater() {
+            Ok(u) => u,
+            Err(_) => return Ok(serde_json::json!({ "available": false })),
+        };
+        return match updater.check().await {
+            Ok(Some(update)) => Ok(serde_json::json!({
+                "available": true,
+                "version": update.version,
+                "body": update.body.unwrap_or_default(),
+            })),
+            _ => Ok(serde_json::json!({ "available": false })),
+        };
     }
+    #[cfg(debug_assertions)]
+    Ok(serde_json::json!({ "available": false }))
 }
 
 // ── Demo data ─────────────────────────────────────────────────────────────────

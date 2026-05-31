@@ -55,13 +55,5 @@
       }
     }
   },
-  "plugins": {
-    "updater": {
-      "endpoints": [
-        "https://github.com/andreboyer/wifi-troubleshooter/releases/latest/download/latest.json"
-      ],
-      "dialog": true,
-      "pubkey": ""
-    }
-  }
+  "plugins": {}
 }
