@@ -30,6 +30,9 @@ pub struct Settings {
     pub watchlist: Vec<String>,
     /// `host:port` strings to probe for SaaS / payment-processor reachability.
     pub pos_targets: Vec<String>,
+    /// True after the user has completed the first-run onboarding wizard.
+    #[serde(default)]
+    pub onboarding_complete: bool,
 }
 
 impl Default for Settings {
@@ -46,6 +49,7 @@ impl Default for Settings {
             industry_profile: "home".to_string(),
             watchlist: vec![],
             pos_targets: vec![],
+            onboarding_complete: false,
         }
     }
 }

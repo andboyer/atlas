@@ -11,12 +11,15 @@ import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
 import ChannelMap from "./components/ChannelMap";
 import ChatPanel from "./components/ChatPanel";
+import OnboardingWizard from "./components/OnboardingWizard";
 import { useApp } from "./store";
 
 function App() {
   const mode = useApp((s) => s.mode);
   const monitoring = useApp((s) => s.monitoring);
   const lastScan = useApp((s) => s.lastScan);
+  const settings = useApp((s) => s.settings);
+  const settingsLoaded = useApp((s) => s.settingsLoaded);
   const loadSettings = useApp((s) => s.loadSettings);
   const subscribeToScanEvents = useApp((s) => s.subscribeToScanEvents);
   const [showSettings, setShowSettings] = useState(false);
@@ -175,6 +178,10 @@ function App() {
       </main>
 
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+
+      {settingsLoaded && !settings?.onboarding_complete && (
+        <OnboardingWizard onComplete={() => loadSettings()} />
+      )}
     </div>
   );
 }

@@ -150,4 +150,5 @@ export interface Settings {
   industry_profile: string;
   watchlist: string[];
   pos_targets: string[];
+  onboarding_complete: boolean;
 }

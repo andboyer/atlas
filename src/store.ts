@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS: Settings = {
   industry_profile: "home",
   watchlist: [],
   pos_targets: [],
+  onboarding_complete: false,
 };
 
 interface AppState {
