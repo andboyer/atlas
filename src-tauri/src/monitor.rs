@@ -62,10 +62,12 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
     let profile = crate::commands::profile_hints_from(&settings);
     let targets = crate::commands::effective_targets(&settings);
 
-    let (mut devices, services, captive_portal) = tokio::join!(
+    let (mut devices, services, captive_portal, dns_leak, mtu_bytes) = tokio::join!(
         crate::discovery::scan::discover_and_probe(),
         crate::probes::services::probe_services(&targets),
         crate::probes::captive::is_captive_portal(),
+        crate::probes::dns_leak::is_dns_leak(),
+        crate::probes::mtu::discover_mtu(),
     );
     if devices.is_empty() {
         devices = crate::commands::demo_devices();
@@ -82,6 +84,8 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         profile,
         anomalies,
         captive_portal,
+        dns_leak,
+        mtu_bytes,
     });
     let recommendations = detect::collect_recommendations(&findings);
 
@@ -96,6 +100,8 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         recommendations,
         service_reachability: services,
         captive_portal,
+        dns_leak,
+        mtu_bytes,
     };
 
     if let Err(e) = state.store.record_scan(&result) {

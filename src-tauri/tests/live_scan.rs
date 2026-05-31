@@ -46,6 +46,8 @@ async fn live_macos_findings() {
         profile: ProfileHints::default(),
         anomalies: vec![],
         captive_portal: false,
+        dns_leak: false,
+        mtu_bytes: None,
     });
     let recs = detect::collect_recommendations(&findings);
     println!("\n=== {} FINDINGS ===", findings.len());

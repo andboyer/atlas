@@ -30,6 +30,10 @@ pub struct Context<'a> {
     pub anomalies: Vec<AnomalySignal>,
     /// True when a captive portal was detected during this scan.
     pub captive_portal: bool,
+    /// True when DNS queries appear to leak to a public/unexpected resolver.
+    pub dns_leak: bool,
+    /// Effective path MTU discovered via ping DF-bit probing (None if unavailable).
+    pub mtu_bytes: Option<u32>,
 }
 
 pub struct RuleHit {

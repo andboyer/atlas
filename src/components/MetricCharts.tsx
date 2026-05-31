@@ -10,14 +10,13 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
-import type { MetricSample } from "../types";
+import type { DeviceEvent, MetricSample } from "../types";
 
 interface ChartConfig {
   metric: string;
   label: string;
   color: string;
   unit: string;
-  /** Optional horizontal reference line (e.g. -70 dBm threshold). */
   threshold?: number;
   thresholdLabel?: string;
 }
@@ -49,8 +48,15 @@ const CHARTS: ChartConfig[] = [
   },
 ];
 
+function eventStroke(type: string): string {
+  if (type === "offline") return "#f87171";
+  if (type === "online") return "#34d399";
+  return "#818cf8";
+}
+
 function Sparkline({ config }: { config: ChartConfig }) {
   const [data, setData] = useState<MetricSample[]>([]);
+  const [events, setEvents] = useState<DeviceEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchData = () =>
@@ -62,10 +68,19 @@ function Sparkline({ config }: { config: ChartConfig }) {
       .catch(() => setData([]))
       .finally(() => setLoading(false));
 
+  const fetchEvents = () =>
+    invoke<DeviceEvent[]>("get_recent_device_events", { limit: 50 })
+      .then((evts) => setEvents(evts))
+      .catch(() => setEvents([]));
+
   useEffect(() => {
     fetchData();
+    fetchEvents();
     let unlisten: (() => void) | undefined;
-    listen("scan:completed", () => void fetchData()).then((fn) => {
+    listen("scan:completed", () => {
+      void fetchData();
+      void fetchEvents();
+    }).then((fn) => {
       unlisten = fn;
     });
     return () => { unlisten?.(); };
@@ -77,9 +92,33 @@ function Sparkline({ config }: { config: ChartConfig }) {
       hour: "2-digit",
       minute: "2-digit",
     }),
+    isoTime: s.sampled_at,
   }));
 
   const latest = data.length > 0 ? data[data.length - 1].value : undefined;
+
+  // Events that fall within the chart time window.
+  const chartStart = data.length > 0 ? new Date(data[0].sampled_at).getTime() : 0;
+  const chartEnd = data.length > 0 ? new Date(data[data.length - 1].sampled_at).getTime() : 0;
+  const overlayEvents = events.filter((e) => {
+    const t = new Date(e.occurred_at).getTime();
+    return t >= chartStart && t <= chartEnd;
+  });
+
+  // Map each event to the nearest chart x-axis tick.
+  const overlayLines = overlayEvents.map((e) => {
+    const t = new Date(e.occurred_at).getTime();
+    let nearest = chartData[0];
+    for (const d of chartData) {
+      if (
+        Math.abs(new Date(d.isoTime).getTime() - t) <
+        Math.abs(new Date(nearest.isoTime).getTime() - t)
+      ) {
+        nearest = d;
+      }
+    }
+    return { time: nearest.time, type: e.event_type };
+  });
 
   return (
     <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-4">
@@ -105,7 +144,11 @@ function Sparkline({ config }: { config: ChartConfig }) {
       ) : (
         <ResponsiveContainer width="100%" height={80}>
           <LineChart data={chartData} margin={{ top: 4, right: 4, left: -30, bottom: 0 }}>
-            <XAxis dataKey="time" tick={{ fontSize: 9, fill: "#64748b" }} interval="preserveStartEnd" />
+            <XAxis
+              dataKey="time"
+              tick={{ fontSize: 9, fill: "#64748b" }}
+              interval="preserveStartEnd"
+            />
             <YAxis tick={{ fontSize: 9, fill: "#64748b" }} />
             <Tooltip
               contentStyle={{
@@ -129,6 +172,21 @@ function Sparkline({ config }: { config: ChartConfig }) {
                 }}
               />
             )}
+            {overlayLines.map((ol, i) => (
+              <ReferenceLine
+                key={i}
+                x={ol.time}
+                stroke={eventStroke(ol.type)}
+                strokeDasharray="3 2"
+                strokeWidth={1.5}
+                label={{
+                  value: ol.type === "offline" ? "✕" : "↑",
+                  fill: eventStroke(ol.type),
+                  fontSize: 9,
+                  position: "insideTopLeft",
+                }}
+              />
+            ))}
             <Line
               type="monotone"
               dataKey="value"

@@ -37,6 +37,9 @@ pub fn all_rules() -> Vec<Rule> {
         rule_anomaly_loss_spike,
         // ── Captive portal ──
         rule_captive_portal,
+        // ── DNS leak + MTU ──
+        rule_dns_leak,
+        rule_low_mtu,
     ]
 }
 
@@ -713,6 +716,49 @@ fn rule_captive_portal(ctx: &Context) -> Option<RuleHit> {
     })
 }
 
+// ─────────────────────────── DNS leak ────────────────────────────────────
+
+fn rule_dns_leak(ctx: &Context) -> Option<RuleHit> {
+    if !ctx.dns_leak {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "detect.dns_leak",
+        title: "DNS leak — queries routed to a public resolver".into(),
+        severity: Severity::Medium,
+        confidence: 0.80,
+        evidence: vec![
+            "DNS resolution returned an address belonging to a public resolver (Google, Cloudflare, etc.).".into(),
+            "If you are using a VPN or private DNS, your DNS traffic may not be tunnelled.".into(),
+        ],
+        affected_devices: vec![],
+        recommendation_id: Some("rec.dns_leak"),
+    })
+}
+
+// ─────────────────────────── Low MTU ─────────────────────────────────────
+
+fn rule_low_mtu(ctx: &Context) -> Option<RuleHit> {
+    use crate::probes::mtu::MTU_LOW_THRESHOLD;
+    let mtu = ctx.mtu_bytes?;
+    if mtu >= MTU_LOW_THRESHOLD {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "detect.low_mtu",
+        title: format!("Low path MTU detected ({mtu} bytes)"),
+        severity: Severity::Low,
+        confidence: 0.85,
+        evidence: vec![
+            format!("Effective path MTU is {mtu} bytes (standard Ethernet is 1500)."),
+            "This can cause slowdowns, black-hole routing, and TCP stalls for large transfers.".into(),
+            "Common causes: VPN tunnel, PPPoE DSL, 6in4/GRE encapsulation.".into(),
+        ],
+        affected_devices: vec![],
+        recommendation_id: Some("rec.low_mtu"),
+    })
+}
+
 #[cfg(test)]
 impl std::fmt::Debug for RuleHit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -785,6 +831,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_no_gateway(&ctx).is_some());
     }
@@ -801,6 +849,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_upstream_only_high(&ctx).is_some());
     }
@@ -817,6 +867,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_internet_unreachable(&ctx).is_some());
     }
@@ -840,6 +892,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_pos_printer_break(&ctx).is_some());
     }
@@ -864,6 +918,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_ap_overload(&ctx).is_some());
     }
@@ -884,6 +940,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_slow_device(&ctx).is_some());
     }
@@ -903,6 +961,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_iot_majority_offline(&ctx).is_some());
     }
@@ -929,6 +989,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         let hits: Vec<_> = all_rules().iter().filter_map(|r| r(&ctx)).collect();
         assert!(hits.is_empty(), "expected no findings, got {hits:?}");
@@ -958,6 +1020,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         let hit = rule_pos_processor_unreachable(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "pos.processor_unreachable");
@@ -984,6 +1048,8 @@ mod tests {
             profile,
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         let hit = rule_pos_processor_high_latency(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "pos.processor_high_latency");
@@ -1007,6 +1073,8 @@ mod tests {
             profile,
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         let hit = rule_watched_device_offline(&ctx).expect("should fire");
         assert_eq!(hit.severity, Severity::Critical);
@@ -1028,6 +1096,8 @@ mod tests {
             profile,
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_watched_device_offline(&ctx).is_none());
     }
@@ -1048,6 +1118,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![sig],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         let hit = rule_anomaly_rssi_drop(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "anomaly.rssi_drop");
@@ -1069,6 +1141,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![sig],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         let hit = rule_anomaly_latency_spike(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "anomaly.latency_spike");
@@ -1084,6 +1158,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: true,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         let hit = rule_captive_portal(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "detect.captive_portal");
@@ -1099,6 +1175,8 @@ mod tests {
             profile: ProfileHints::default(),
             anomalies: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         };
         assert!(rule_captive_portal(&ctx).is_none());
     }

@@ -536,6 +536,8 @@ mod tests {
             recommendations: vec![],
             service_reachability: vec![],
             captive_portal: false,
+            dns_leak: false,
+            mtu_bytes: None,
         }
     }
 

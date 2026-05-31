@@ -30,11 +30,13 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
     let profile = profile_hints_from(&settings);
     let targets = effective_targets(&settings);
 
-    // LAN discovery + SaaS probes + captive-portal probe run concurrently.
-    let (mut devices, services, captive_portal) = tokio::join!(
+    // LAN discovery + SaaS probes + captive-portal + DNS leak + MTU probes run concurrently.
+    let (mut devices, services, captive_portal, dns_leak, mtu_bytes) = tokio::join!(
         crate::discovery::scan::discover_and_probe(),
         crate::probes::services::probe_services(&targets),
         crate::probes::captive::is_captive_portal(),
+        crate::probes::dns_leak::is_dns_leak(),
+        crate::probes::mtu::discover_mtu(),
     );
     if devices.is_empty() {
         devices = demo_devices();
@@ -52,6 +54,8 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
         profile,
         anomalies,
         captive_portal,
+        dns_leak,
+        mtu_bytes,
     });
     let recommendations = detect::collect_recommendations(&findings);
 
@@ -66,6 +70,8 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
         recommendations,
         service_reachability: services,
         captive_portal,
+        dns_leak,
+        mtu_bytes,
     };
 
     if let Err(e) = state.store.record_scan(&result) {

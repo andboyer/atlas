@@ -93,6 +93,8 @@ export interface ScanResult {
   service_reachability: ServiceProbe[];
   /** True when a captive portal was detected during this scan. */
   captive_portal: boolean;
+  dns_leak: boolean;
+  mtu_bytes: number | null;
 }
 
 export interface ScanSummary {

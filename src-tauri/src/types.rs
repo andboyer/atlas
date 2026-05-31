@@ -133,4 +133,8 @@ pub struct ScanResult {
     /// True when a captive portal was detected during this scan.
     #[serde(default)]
     pub captive_portal: bool,
+    #[serde(default)]
+    pub dns_leak: bool,
+    #[serde(default)]
+    pub mtu_bytes: Option<u32>,
 }

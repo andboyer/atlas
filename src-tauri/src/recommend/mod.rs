@@ -240,5 +240,31 @@ pub fn catalog() -> Vec<Recommendation> {
             ],
             &[],
         ),
+        rec(
+            "rec.dns_leak",
+            "Fix DNS leak — use encrypted or private resolver",
+            "Your DNS queries are being sent to a public resolver outside your expected network path. This may expose browsing metadata.",
+            &[
+                "If using a VPN: check that 'DNS leak protection' / 'Force DNS through tunnel' is enabled in the VPN client.",
+                "Configure DNS-over-HTTPS (DoH) or DNS-over-TLS (DoT) on your device: macOS System Settings → Network → DNS → use 1.1.1.1#cloudflare-dns.com or 8.8.8.8.",
+                "On Windows: Settings → Network & Internet → Wi-Fi → Hardware properties → DNS server assignment → Manual → enable Preferred DNS encryption.",
+                "For enterprises: push a local DNS resolver via DHCP (option 6) so all clients use the internal resolver.",
+                "Test the fix at https://browserleaks.com/dns or https://dnsleaktest.com.",
+            ],
+            &[("DNS Leak Test", "https://dnsleaktest.com")],
+        ),
+        rec(
+            "rec.low_mtu",
+            "Fix low MTU — enable PMTU discovery or clamp TCP MSS",
+            "The effective path MTU is smaller than the standard 1500 bytes. Large TCP packets may be silently dropped, causing intermittent stalls.",
+            &[
+                "Enable Path MTU Discovery: macOS/Linux automatically use PMTU; ensure firewall rules do not block ICMP type 3 (Fragmentation Needed).",
+                "On a router/firewall: add a rule to clamp TCP MSS to the discovered MTU minus 40 (e.g., iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu).",
+                "If using a VPN: lower the VPN MTU setting (common values: tun-mtu 1400 for OpenVPN, mtu 1280 for WireGuard).",
+                "For PPPoE DSL connections: set WAN MTU to 1492 in your router's WAN settings.",
+                "Test the fix: ping -s 1464 -D 1.1.1.1 (Linux) or ping -s 1464 -D 1.1.1.1 (macOS) should succeed without fragmentation.",
+            ],
+            &[],
+        ),
     ]
 }
