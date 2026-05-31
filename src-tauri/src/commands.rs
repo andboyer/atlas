@@ -1,18 +1,17 @@
 use crate::collectors::default_collector;
 use crate::detect::{self, Context};
-use crate::store::Store;
+use crate::store::{DeviceEvent, ScanSummary, Store};
 use crate::types::{DeviceClass, DeviceInfo, ScanResult};
 use chrono::Utc;
 use tauri::State;
 use uuid::Uuid;
 
 pub struct AppState {
-    #[allow(dead_code)]
     pub store: Store,
 }
 
 #[tauri::command]
-pub async fn run_quick_scan(_state: State<'_, AppState>) -> Result<ScanResult, String> {
+pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, String> {
     let started_at = Utc::now();
     let collector = default_collector();
     let link = collector.link_stats().await.map_err(|e| e.to_string())?;
@@ -32,7 +31,7 @@ pub async fn run_quick_scan(_state: State<'_, AppState>) -> Result<ScanResult, S
     });
     let recommendations = detect::collect_recommendations(&findings);
 
-    Ok(ScanResult {
+    let result = ScanResult {
         run_id: Uuid::new_v4().to_string(),
         started_at,
         finished_at: Utc::now(),
@@ -41,7 +40,49 @@ pub async fn run_quick_scan(_state: State<'_, AppState>) -> Result<ScanResult, S
         devices,
         findings,
         recommendations,
-    })
+    };
+
+    // Persist for history / incident-timeline correlation. We never fail the
+    // scan if the write fails — the user still sees their results.
+    if let Err(e) = state.store.record_scan(&result) {
+        eprintln!("warning: failed to persist scan: {e:#}");
+    }
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_recent_scans(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<ScanSummary>, String> {
+    state
+        .store
+        .recent_scans(limit.unwrap_or(50))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_device_events(
+    state: State<'_, AppState>,
+    mac: String,
+    limit: Option<i64>,
+) -> Result<Vec<DeviceEvent>, String> {
+    state
+        .store
+        .device_events_for(&mac, limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_recent_device_events(
+    state: State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<Vec<DeviceEvent>, String> {
+    state
+        .store
+        .recent_device_events(limit.unwrap_or(100))
+        .map_err(|e| e.to_string())
 }
 
 fn mock_devices() -> Vec<DeviceInfo> {

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at TEXT,
     summary_json TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at);
 
 CREATE TABLE IF NOT EXISTS samples (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS devices (
     class TEXT,
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
+    last_online INTEGER NOT NULL DEFAULT 0,
     watched INTEGER NOT NULL DEFAULT 0
 );
 
@@ -37,6 +39,8 @@ CREATE TABLE IF NOT EXISTS device_events (
 );
 CREATE INDEX IF NOT EXISTS idx_device_events_mac_time
     ON device_events(mac, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_device_events_time
+    ON device_events(occurred_at);
 
 CREATE TABLE IF NOT EXISTS findings (
     id TEXT PRIMARY KEY,
@@ -47,4 +51,5 @@ CREATE TABLE IF NOT EXISTS findings (
     observed_at TEXT NOT NULL,
     payload_json TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_findings_observed ON findings(observed_at);
 "#;

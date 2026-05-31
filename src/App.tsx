@@ -2,6 +2,7 @@ import { ModeToggle } from "./components/ModeToggle";
 import { StatusCard } from "./components/StatusCard";
 import { FindingsList } from "./components/FindingsList";
 import { DeviceList } from "./components/DeviceList";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { useApp } from "./store";
 
 function App() {
@@ -39,6 +40,15 @@ function App() {
               Devices on this network
             </h2>
             <DeviceList />
+          </section>
+        )}
+
+        {mode === "admin" && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              History
+            </h2>
+            <HistoryPanel />
           </section>
         )}
       </main>

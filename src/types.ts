@@ -82,3 +82,20 @@ export interface ScanResult {
   findings: Finding[];
   recommendations: Recommendation[];
 }
+
+export interface ScanSummary {
+  run_id: string;
+  started_at: string;
+  finished_at: string | null;
+  findings_count: number;
+  devices_online: number;
+  devices_total: number;
+  worst_severity: Severity | null;
+}
+
+export interface DeviceEvent {
+  mac: string;
+  occurred_at: string;
+  event_type: "first_seen" | "online" | "offline" | string;
+  details: string | null;
+}

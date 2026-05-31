@@ -1,4 +1,7 @@
+pub mod persist;
 pub mod schema;
+
+pub use persist::{DeviceEvent, ScanSummary};
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -8,7 +11,6 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Store {
-    #[allow(dead_code)]
     conn: Arc<Mutex<Connection>>,
 }
 
@@ -25,7 +27,7 @@ impl Store {
         })
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(schema::SCHEMA_SQL)?;

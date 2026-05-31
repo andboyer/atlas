@@ -29,7 +29,12 @@ pub fn run() {
             app.manage(AppState { store });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::run_quick_scan])
+        .invoke_handler(tauri::generate_handler![
+            commands::run_quick_scan,
+            commands::get_recent_scans,
+            commands::get_device_events,
+            commands::get_recent_device_events,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
