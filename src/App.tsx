@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { ModeToggle } from "./components/ModeToggle";
 import { StatusCard } from "./components/StatusCard";
 import { FindingsList } from "./components/FindingsList";
 import { DeviceList } from "./components/DeviceList";
 import { HistoryPanel } from "./components/HistoryPanel";
+import { MetricCharts } from "./components/MetricCharts";
 import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useApp } from "./store";
@@ -11,9 +13,11 @@ import { useApp } from "./store";
 function App() {
   const mode = useApp((s) => s.mode);
   const monitoring = useApp((s) => s.monitoring);
+  const lastScan = useApp((s) => s.lastScan);
   const loadSettings = useApp((s) => s.loadSettings);
   const subscribeToScanEvents = useApp((s) => s.subscribeToScanEvents);
   const [showSettings, setShowSettings] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -21,6 +25,25 @@ function App() {
     subscribeToScanEvents().then((fn) => { unsub = fn; });
     return () => { unsub?.(); };
   }, []);
+
+  const handleExport = async () => {
+    if (!lastScan) return;
+    setExporting(true);
+    try {
+      const html = await invoke<string>("export_report", { runId: lastScan.run_id });
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `wifi-report-${lastScan.run_id.slice(0, 8)}.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("export failed", e);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen">
@@ -43,6 +66,16 @@ function App() {
           </div>
           <div className="flex items-center gap-3">
             <ModeToggle />
+            {mode === "admin" && lastScan && (
+              <button
+                onClick={handleExport}
+                disabled={exporting}
+                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] px-3 py-1.5 text-sm text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors disabled:opacity-50"
+                title="Export HTML report"
+              >
+                {exporting ? "Exporting…" : "⬇ Export"}
+              </button>
+            )}
             <button
               onClick={() => setShowSettings(true)}
               className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] px-3 py-1.5 text-sm text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
@@ -55,6 +88,16 @@ function App() {
       </header>
 
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+        {lastScan?.captive_portal && (
+          <div className="flex items-center gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-5 py-3 text-sm text-yellow-200">
+            <span className="text-lg">⚠</span>
+            <div>
+              <strong>Captive portal detected.</strong> Your traffic is being intercepted by a login
+              page (hotel, café, or corporate network). Browse to any http:// page to authenticate.
+            </div>
+          </div>
+        )}
+
         <StatusCard />
 
         <section>
@@ -63,6 +106,15 @@ function App() {
           </h2>
           <FindingsList />
         </section>
+
+        {(mode === "pro" || mode === "admin") && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Live metrics
+            </h2>
+            <MetricCharts />
+          </section>
+        )}
 
         {(mode === "pro" || mode === "admin") && (
           <section>

@@ -57,14 +57,16 @@ impl super::Store {
         let tx = guard.transaction()?;
 
         // ── runs ──
+        let full_json = serde_json::to_string(scan)?;
         tx.execute(
-            "INSERT OR REPLACE INTO runs (id, started_at, finished_at, summary_json) \
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO runs (id, started_at, finished_at, summary_json, full_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 scan.run_id,
                 scan.started_at.to_rfc3339(),
                 scan.finished_at.to_rfc3339(),
                 serde_json::to_string(&run_summary(scan))?,
+                full_json,
             ],
         )?;
 
@@ -358,6 +360,50 @@ impl super::Store {
             concurrent_events,
         })
     }
+
+    /// Return up to `limit` metric samples for `metric`, oldest first (for
+    /// EWMA computation). The most recent sample is always the last element.
+    pub fn recent_metric_samples(
+        &self,
+        metric: &str,
+        limit: usize,
+    ) -> Result<Vec<MetricSample>> {
+        let guard = self.conn.lock();
+        let mut stmt = guard.prepare(
+            "SELECT metric, value, sampled_at, label \
+             FROM samples WHERE metric = ?1 \
+             ORDER BY sampled_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![metric, limit as i64], |r| {
+            Ok(MetricSample {
+                metric: r.get(0)?,
+                value: r.get(1)?,
+                sampled_at: parse_dt(&r.get::<_, String>(2)?),
+                label: r.get(3)?,
+            })
+        })?;
+        let mut samples: Vec<MetricSample> = rows.collect::<Result<Vec<_>, _>>()?;
+        // Reverse so oldest is first — required for EWMA sweep.
+        samples.reverse();
+        Ok(samples)
+    }
+
+    /// Return the full `ScanResult` JSON blob stored for `run_id`, or `None`
+    /// if the run is not found or predates the full_json migration.
+    pub fn get_scan_full(&self, run_id: &str) -> Result<Option<ScanResult>> {
+        let guard = self.conn.lock();
+        let json: Option<String> = guard
+            .query_row(
+                "SELECT full_json FROM runs WHERE id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match json.as_deref() {
+            Some(s) => Ok(Some(serde_json::from_str(s)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize, serde::Deserialize)]
@@ -489,6 +535,7 @@ mod tests {
             findings,
             recommendations: vec![],
             service_reachability: vec![],
+            captive_portal: false,
         }
     }
 

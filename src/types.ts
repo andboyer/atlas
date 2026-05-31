@@ -91,6 +91,8 @@ export interface ScanResult {
   findings: Finding[];
   recommendations: Recommendation[];
   service_reachability: ServiceProbe[];
+  /** True when a captive portal was detected during this scan. */
+  captive_portal: boolean;
 }
 
 export interface ScanSummary {

@@ -52,6 +52,8 @@ pub fn run() {
             commands::start_monitoring,
             commands::stop_monitoring,
             commands::explain_findings,
+            commands::get_metric_history,
+            commands::export_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

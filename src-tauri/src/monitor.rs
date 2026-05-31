@@ -1,5 +1,5 @@
 use crate::commands::AppState;
-use crate::detect::{self, Context};
+use crate::detect::{self, AnomalySignal, Context};
 use crate::settings::{severity_order, Settings};
 use crate::types::ScanResult;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,13 +62,17 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
     let profile = crate::commands::profile_hints_from(&settings);
     let targets = crate::commands::effective_targets(&settings);
 
-    let (mut devices, services) = tokio::join!(
+    let (mut devices, services, captive_portal) = tokio::join!(
         crate::discovery::scan::discover_and_probe(),
         crate::probes::services::probe_services(&targets),
+        crate::probes::captive::is_captive_portal(),
     );
     if devices.is_empty() {
         devices = crate::commands::demo_devices();
     }
+
+    let anomalies: Vec<AnomalySignal> =
+        detect::anomaly::compute_anomalies(&state.store);
 
     let findings = detect::evaluate(&Context {
         link: &link,
@@ -76,6 +80,8 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         devices: &devices,
         services: &services,
         profile,
+        anomalies,
+        captive_portal,
     });
     let recommendations = detect::collect_recommendations(&findings);
 
@@ -89,6 +95,7 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         findings,
         recommendations,
         service_reachability: services,
+        captive_portal,
     };
 
     if let Err(e) = state.store.record_scan(&result) {

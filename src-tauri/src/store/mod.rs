@@ -1,7 +1,7 @@
 pub mod persist;
 pub mod schema;
 
-pub use persist::{DeviceEvent, IncidentCorrelation, ScanSummary};
+pub use persist::{DeviceEvent, IncidentCorrelation, MetricSample, ScanSummary};
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -22,6 +22,8 @@ impl Store {
         let conn = Connection::open(&db_path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         conn.execute_batch(schema::SCHEMA_SQL)?;
+        // Schema migrations (idempotent — silently ignored if column already exists)
+        let _ = conn.execute("ALTER TABLE runs ADD COLUMN full_json TEXT", []);
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -31,6 +33,7 @@ impl Store {
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(schema::SCHEMA_SQL)?;
+        let _ = conn.execute("ALTER TABLE runs ADD COLUMN full_json TEXT", []);
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })

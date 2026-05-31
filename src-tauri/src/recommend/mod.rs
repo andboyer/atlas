@@ -188,5 +188,57 @@ pub fn catalog() -> Vec<Recommendation> {
             ],
             &[],
         ),
+        rec(
+            "rec.anomaly_rssi",
+            "Investigate sudden RSSI drop",
+            "Your WiFi signal dropped sharply compared to its recent baseline. This often precedes connectivity failures.",
+            &[
+                "Check whether the AP was rebooted or lost power.",
+                "Look for new obstructions (furniture, new appliances) between you and the AP.",
+                "If you're on a multi-AP mesh, check whether the system roamed you to a far AP.",
+                "Temporarily move closer to the AP to confirm signal recovers.",
+                "If the drop is persistent, consider adding an AP or repositioning the existing one.",
+            ],
+            &[],
+        ),
+        rec(
+            "rec.anomaly_latency",
+            "Investigate sudden latency spike to gateway",
+            "Gateway latency jumped well above its recent baseline. This indicates local network congestion or router issues.",
+            &[
+                "Check your router's CPU and memory usage (admin UI > Status).",
+                "Look for bandwidth-intensive transfers or a new device saturating the LAN.",
+                "If you have QoS/SQM enabled, verify it's configured correctly for your line speed.",
+                "Reboot the router if CPU usage looks high — some models accumulate state over long uptimes.",
+                "Check for firmware updates for the router.",
+            ],
+            &[],
+        ),
+        rec(
+            "rec.anomaly_loss",
+            "Investigate sudden packet loss spike",
+            "Packet loss jumped sharply. Sustained loss above ~2% causes application-level failures.",
+            &[
+                "Run a continuous ping to your gateway to confirm the loss is real and persistent.",
+                "Check for RF interference — microwave ovens, cordless phones, and baby monitors can cause burst loss on 2.4 GHz.",
+                "Check the router's WAN interface for CRC errors or input errors (admin UI > WAN stats).",
+                "Contact your ISP if loss is present on the WAN side.",
+                "On WiFi, try switching channels or bands to rule out interference.",
+            ],
+            &[],
+        ),
+        rec(
+            "rec.captive_portal",
+            "Complete captive portal login",
+            "You are connected to a network with a captive portal. Browsing and app traffic will fail until you authenticate.",
+            &[
+                "Open a browser and navigate to any http:// (not https://) page — the portal login page should appear.",
+                "Complete the login, accept terms, or enter your room/ticket code.",
+                "If the portal page doesn't open, try navigating to http://neverssl.com.",
+                "For recurring portals (hotel, coffee shop): consider using your phone as a hotspot for sensitive work.",
+                "For POS / IoT devices: captive portals are incompatible with automated systems — switch to a known-clean network.",
+            ],
+            &[],
+        ),
     ]
 }

@@ -44,6 +44,8 @@ async fn live_macos_findings() {
         devices: &devices,
         services: &[],
         profile: ProfileHints::default(),
+        anomalies: vec![],
+        captive_portal: false,
     });
     let recs = detect::collect_recommendations(&findings);
     println!("\n=== {} FINDINGS ===", findings.len());

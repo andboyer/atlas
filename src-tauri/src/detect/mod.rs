@@ -5,7 +5,10 @@ use crate::types::{
 use chrono::Utc;
 use uuid::Uuid;
 
+pub mod anomaly;
 pub mod rules;
+
+pub use anomaly::AnomalySignal;
 
 /// Tunable hints derived from the active industry profile + user settings.
 #[derive(Default, Debug, Clone)]
@@ -23,6 +26,10 @@ pub struct Context<'a> {
     pub devices: &'a [DeviceInfo],
     pub services: &'a [ServiceProbe],
     pub profile: ProfileHints,
+    /// Pre-computed anomaly signals from the EWMA engine. Empty on first scan.
+    pub anomalies: Vec<AnomalySignal>,
+    /// True when a captive portal was detected during this scan.
+    pub captive_portal: bool,
 }
 
 pub struct RuleHit {

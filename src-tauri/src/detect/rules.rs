@@ -31,6 +31,12 @@ pub fn all_rules() -> Vec<Rule> {
         rule_iot_majority_offline,
         // ── User watchlist ──
         rule_watched_device_offline,
+        // ── Anomaly detection ──
+        rule_anomaly_rssi_drop,
+        rule_anomaly_latency_spike,
+        rule_anomaly_loss_spike,
+        // ── Captive portal ──
+        rule_captive_portal,
     ]
 }
 
@@ -601,6 +607,112 @@ fn rule_watched_device_offline(ctx: &Context) -> Option<RuleHit> {
     })
 }
 
+// ─────────────────────────── Anomaly rules ───────────────────────────────
+
+fn rule_anomaly_rssi_drop(ctx: &Context) -> Option<RuleHit> {
+    let sig = ctx
+        .anomalies
+        .iter()
+        .find(|a| a.metric == "link.rssi_dbm")?;
+    if sig.z_score > -2.5 {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "anomaly.rssi_drop",
+        title: format!(
+            "WiFi signal dropped suddenly (RSSI {:.0} dBm, z = {:.1})",
+            sig.current, sig.z_score
+        ),
+        severity: Severity::High,
+        confidence: 0.75,
+        evidence: vec![
+            format!(
+                "RSSI {:.0} dBm vs baseline {:.0} dBm (z = {:.2})",
+                sig.current, sig.baseline, sig.z_score
+            ),
+            "Sudden drop indicates roaming failure, AP reboot, or physical obstruction.".into(),
+        ],
+        affected_devices: vec![],
+        recommendation_id: Some("rec.anomaly_rssi"),
+    })
+}
+
+fn rule_anomaly_latency_spike(ctx: &Context) -> Option<RuleHit> {
+    let sig = ctx
+        .anomalies
+        .iter()
+        .find(|a| a.metric == "reach.gateway_ms")?;
+    if sig.z_score < 3.0 {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "anomaly.latency_spike",
+        title: format!(
+            "Gateway latency spiked ({:.0} ms, z = {:.1})",
+            sig.current, sig.z_score
+        ),
+        severity: Severity::High,
+        confidence: 0.75,
+        evidence: vec![
+            format!(
+                "Gateway latency {:.0} ms vs baseline {:.0} ms (z = {:.2})",
+                sig.current, sig.baseline, sig.z_score
+            ),
+            "Latency spike may indicate congestion, interference, or router CPU saturation.".into(),
+        ],
+        affected_devices: vec![],
+        recommendation_id: Some("rec.anomaly_latency"),
+    })
+}
+
+fn rule_anomaly_loss_spike(ctx: &Context) -> Option<RuleHit> {
+    let sig = ctx
+        .anomalies
+        .iter()
+        .find(|a| a.metric == "reach.loss_pct")?;
+    if sig.z_score < 3.0 {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "anomaly.loss_spike",
+        title: format!(
+            "Packet loss spiked ({:.0}%, z = {:.1})",
+            sig.current, sig.z_score
+        ),
+        severity: Severity::Critical,
+        confidence: 0.85,
+        evidence: vec![
+            format!(
+                "Loss {:.1}% vs baseline {:.1}% (z = {:.2})",
+                sig.current, sig.baseline, sig.z_score
+            ),
+            "Loss spike often precedes complete connectivity failure; investigate immediately.".into(),
+        ],
+        affected_devices: vec![],
+        recommendation_id: Some("rec.anomaly_loss"),
+    })
+}
+
+// ─────────────────────────── Captive portal ──────────────────────────────
+
+fn rule_captive_portal(ctx: &Context) -> Option<RuleHit> {
+    if !ctx.captive_portal {
+        return None;
+    }
+    Some(RuleHit {
+        rule_id: "detect.captive_portal",
+        title: "Captive portal detected — login required".into(),
+        severity: Severity::Medium,
+        confidence: 0.92,
+        evidence: vec![
+            "HTTP probe to connectivitycheck.gstatic.com did not return 204.".into(),
+            "All traffic is being intercepted (hotel, airport, café, or corporate login page).".into(),
+        ],
+        affected_devices: vec![],
+        recommendation_id: Some("rec.captive_portal"),
+    })
+}
+
 #[cfg(test)]
 impl std::fmt::Debug for RuleHit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -614,7 +726,7 @@ impl std::fmt::Debug for RuleHit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detect::ProfileHints;
+    use crate::detect::{AnomalySignal, ProfileHints};
     use crate::types::{DeviceInfo, LinkStats, ReachabilityStats, ServiceProbe};
     use chrono::Utc;
 
@@ -671,6 +783,8 @@ mod tests {
             devices: &[],
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_no_gateway(&ctx).is_some());
     }
@@ -685,6 +799,8 @@ mod tests {
             devices: &[],
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_upstream_only_high(&ctx).is_some());
     }
@@ -699,6 +815,8 @@ mod tests {
             devices: &[],
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_internet_unreachable(&ctx).is_some());
     }
@@ -720,6 +838,8 @@ mod tests {
             devices: &devices,
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_pos_printer_break(&ctx).is_some());
     }
@@ -742,6 +862,8 @@ mod tests {
             devices: &devices,
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_ap_overload(&ctx).is_some());
     }
@@ -760,6 +882,8 @@ mod tests {
             devices: &devices,
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_slow_device(&ctx).is_some());
     }
@@ -777,6 +901,8 @@ mod tests {
             devices: &devices,
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_iot_majority_offline(&ctx).is_some());
     }
@@ -801,6 +927,8 @@ mod tests {
             )],
             services: &[],
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         let hits: Vec<_> = all_rules().iter().filter_map(|r| r(&ctx)).collect();
         assert!(hits.is_empty(), "expected no findings, got {hits:?}");
@@ -828,6 +956,8 @@ mod tests {
             devices: &[],
             services: &services,
             profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
         };
         let hit = rule_pos_processor_unreachable(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "pos.processor_unreachable");
@@ -852,6 +982,8 @@ mod tests {
             devices: &[],
             services: &services,
             profile,
+            anomalies: vec![],
+            captive_portal: false,
         };
         let hit = rule_pos_processor_high_latency(&ctx).expect("should fire");
         assert_eq!(hit.rule_id, "pos.processor_high_latency");
@@ -873,6 +1005,8 @@ mod tests {
             devices: &devices,
             services: &[],
             profile,
+            anomalies: vec![],
+            captive_portal: false,
         };
         let hit = rule_watched_device_offline(&ctx).expect("should fire");
         assert_eq!(hit.severity, Severity::Critical);
@@ -892,8 +1026,81 @@ mod tests {
             devices: &devices,
             services: &[],
             profile,
+            anomalies: vec![],
+            captive_portal: false,
         };
         assert!(rule_watched_device_offline(&ctx).is_none());
+    }
+
+    #[test]
+    fn anomaly_rssi_drop_fires_on_negative_z() {
+        let sig = AnomalySignal {
+            metric: "link.rssi_dbm",
+            current: -85.0,
+            baseline: -55.0,
+            z_score: -3.2,
+        };
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &[],
+            services: &[],
+            profile: ProfileHints::default(),
+            anomalies: vec![sig],
+            captive_portal: false,
+        };
+        let hit = rule_anomaly_rssi_drop(&ctx).expect("should fire");
+        assert_eq!(hit.rule_id, "anomaly.rssi_drop");
+    }
+
+    #[test]
+    fn anomaly_latency_spike_fires_on_positive_z() {
+        let sig = AnomalySignal {
+            metric: "reach.gateway_ms",
+            current: 350.0,
+            baseline: 5.0,
+            z_score: 4.1,
+        };
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &[],
+            services: &[],
+            profile: ProfileHints::default(),
+            anomalies: vec![sig],
+            captive_portal: false,
+        };
+        let hit = rule_anomaly_latency_spike(&ctx).expect("should fire");
+        assert_eq!(hit.rule_id, "anomaly.latency_spike");
+    }
+
+    #[test]
+    fn captive_portal_rule_fires_when_detected() {
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &[],
+            services: &[],
+            profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: true,
+        };
+        let hit = rule_captive_portal(&ctx).expect("should fire");
+        assert_eq!(hit.rule_id, "detect.captive_portal");
+    }
+
+    #[test]
+    fn captive_portal_rule_silent_when_not_detected() {
+        let ctx = Context {
+            link: &empty_link(),
+            reach: &good_reach(),
+            devices: &[],
+            services: &[],
+            profile: ProfileHints::default(),
+            anomalies: vec![],
+            captive_portal: false,
+        };
+        assert!(rule_captive_portal(&ctx).is_none());
     }
 }
 

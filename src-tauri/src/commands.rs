@@ -1,7 +1,7 @@
 use crate::collectors::default_collector;
-use crate::detect::{self, Context};
+use crate::detect::{self, AnomalySignal, Context};
 use crate::settings::Settings;
-use crate::store::{DeviceEvent, IncidentCorrelation, ScanSummary, Store};
+use crate::store::{DeviceEvent, IncidentCorrelation, MetricSample, ScanSummary, Store};
 use crate::types::{DeviceClass, DeviceInfo, ScanResult};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -30,14 +30,19 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
     let profile = profile_hints_from(&settings);
     let targets = effective_targets(&settings);
 
-    // LAN discovery + SaaS probes can run concurrently.
-    let (mut devices, services) = tokio::join!(
+    // LAN discovery + SaaS probes + captive-portal probe run concurrently.
+    let (mut devices, services, captive_portal) = tokio::join!(
         crate::discovery::scan::discover_and_probe(),
         crate::probes::services::probe_services(&targets),
+        crate::probes::captive::is_captive_portal(),
     );
     if devices.is_empty() {
         devices = demo_devices();
     }
+
+    // Anomaly detection reads from persisted samples (empty on first scan).
+    let anomalies: Vec<AnomalySignal> =
+        detect::anomaly::compute_anomalies(&state.store);
 
     let findings = detect::evaluate(&Context {
         link: &link,
@@ -45,6 +50,8 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
         devices: &devices,
         services: &services,
         profile,
+        anomalies,
+        captive_portal,
     });
     let recommendations = detect::collect_recommendations(&findings);
 
@@ -58,6 +65,7 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
         findings,
         recommendations,
         service_reachability: services,
+        captive_portal,
     };
 
     if let Err(e) = state.store.record_scan(&result) {
@@ -209,6 +217,225 @@ fn default_model(provider: &str) -> String {
         "ollama" => "llama3".to_string(),
         _ => "gpt-4o-mini".to_string(),
     }
+}
+
+// ── Metric history + export ───────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_metric_history(
+    state: State<'_, AppState>,
+    metric: String,
+    limit: Option<usize>,
+) -> Result<Vec<MetricSample>, String> {
+    state
+        .store
+        .recent_metric_samples(&metric, limit.unwrap_or(50))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn export_report(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<String, String> {
+    let scan = state
+        .store
+        .get_scan_full(&run_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Run '{run_id}' not found or predates report storage"))?;
+    Ok(render_html_report(&scan))
+}
+
+fn render_html_report(scan: &ScanResult) -> String {
+    let severity_color = |s: &crate::types::Severity| match s {
+        crate::types::Severity::Critical => "#ef4444",
+        crate::types::Severity::High => "#f97316",
+        crate::types::Severity::Medium => "#eab308",
+        crate::types::Severity::Low => "#3b82f6",
+        crate::types::Severity::Info => "#6b7280",
+    };
+
+    let findings_html: String = if scan.findings.is_empty() {
+        "<p style='color:#6b7280'>No findings — network looks healthy.</p>".into()
+    } else {
+        scan.findings
+            .iter()
+            .map(|f| {
+                let color = severity_color(&f.severity);
+                let evidence = f
+                    .evidence
+                    .iter()
+                    .map(|e| format!("<li>{}</li>", html_escape(e)))
+                    .collect::<String>();
+                format!(
+                    r#"<div style="border-left:4px solid {color};padding:8px 12px;margin:8px 0;background:#1a1a2e">
+  <strong style="color:{color}">[{sev}]</strong> {title}
+  <ul style="margin:4px 0 0 16px;color:#aaa">{evidence}</ul>
+</div>"#,
+                    color = color,
+                    sev = f.severity.as_str().to_uppercase(),
+                    title = html_escape(&f.title),
+                    evidence = evidence,
+                )
+            })
+            .collect()
+    };
+
+    let recs_html: String = if scan.recommendations.is_empty() {
+        String::new()
+    } else {
+        scan.recommendations
+            .iter()
+            .map(|r| {
+                let steps = r
+                    .steps
+                    .iter()
+                    .map(|s| format!("<li>{}</li>", html_escape(s)))
+                    .collect::<String>();
+                format!(
+                    r#"<div style="margin:8px 0;padding:8px 12px;background:#1a1a2e;border-radius:6px">
+  <strong>{title}</strong><br><span style="color:#aaa">{summary}</span>
+  <ol style="margin:4px 0 0 16px;color:#ccc">{steps}</ol>
+</div>"#,
+                    title = html_escape(&r.title),
+                    summary = html_escape(&r.summary),
+                    steps = steps,
+                )
+            })
+            .collect()
+    };
+
+    let devices_html: String = scan
+        .devices
+        .iter()
+        .map(|d| {
+            let status = if d.online { "🟢" } else { "🔴" };
+            let latency = d
+                .latency_ms
+                .map(|ms| format!("{ms:.0} ms"))
+                .unwrap_or_else(|| "—".into());
+            format!(
+                "<tr><td>{status}</td><td style='font-family:monospace'>{mac}</td>\
+                 <td>{host}</td><td>{class:?}</td><td>{latency}</td></tr>",
+                status = status,
+                mac = html_escape(&d.mac),
+                host = html_escape(d.hostname.as_deref().unwrap_or("—")),
+                class = d.class,
+                latency = latency,
+            )
+        })
+        .collect();
+
+    let service_html: String = if scan.service_reachability.is_empty() {
+        String::new()
+    } else {
+        let rows: String = scan
+            .service_reachability
+            .iter()
+            .map(|p| {
+                let status = if p.reachable { "🟢" } else { "🔴" };
+                let latency = p
+                    .latency_ms
+                    .map(|ms| format!("{ms:.0} ms"))
+                    .unwrap_or_else(|| "—".into());
+                format!(
+                    "<tr><td>{status}</td><td style='font-family:monospace'>{target}</td>\
+                     <td>{latency}</td><td>{err}</td></tr>",
+                    target = html_escape(&p.target),
+                    latency = latency,
+                    err = html_escape(p.error.as_deref().unwrap_or("")),
+                )
+            })
+            .collect();
+        format!(
+            r#"<h2>Service reachability</h2>
+<table border="1" style="border-collapse:collapse;width:100%">
+<tr><th>Status</th><th>Target</th><th>Latency</th><th>Error</th></tr>
+{rows}</table>"#
+        )
+    };
+
+    let portal_badge = if scan.captive_portal {
+        "<span style='background:#eab308;color:#000;padding:2px 8px;border-radius:4px'>⚠ Captive portal detected</span> "
+    } else {
+        ""
+    };
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WiFi Diagnostic Report — {started}</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; background: #0f0f1a; color: #e2e8f0;
+         max-width: 900px; margin: 0 auto; padding: 24px; }}
+  h1 {{ color: #818cf8; }} h2 {{ color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 4px; }}
+  table {{ border-collapse: collapse; width: 100%; }} th, td {{ padding: 6px 10px; text-align: left; border: 1px solid #334155; }}
+  th {{ background: #1e293b; }} tr:nth-child(even) {{ background: #141428; }}
+</style>
+</head>
+<body>
+<h1>📡 WiFi Diagnostic Report</h1>
+<p>{portal}<strong>Scan:</strong> {started} → {finished}<br>
+<strong>SSID:</strong> {ssid} &nbsp; <strong>RSSI:</strong> {rssi} dBm &nbsp;
+<strong>Gateway latency:</strong> {gw_ms} &nbsp; <strong>Loss:</strong> {loss}</p>
+
+<h2>Findings ({n_findings})</h2>
+{findings}
+
+{recs_section}
+
+<h2>Devices ({n_devices})</h2>
+<table>
+<tr><th></th><th>MAC</th><th>Hostname</th><th>Class</th><th>Latency</th></tr>
+{devices}
+</table>
+
+{services}
+
+<footer style="margin-top:32px;color:#475569;font-size:12px">
+  Generated by WiFi Troubleshooter · {generated}
+</footer>
+</body></html>"#,
+        started = scan.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
+        finished = scan.finished_at.format("%H:%M:%S UTC"),
+        portal = portal_badge,
+        ssid = html_escape(scan.link.ssid.as_deref().unwrap_or("—")),
+        rssi = scan
+            .link
+            .rssi_dbm
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "—".into()),
+        gw_ms = scan
+            .reachability
+            .gateway_latency_ms
+            .map(|v| format!("{v:.0} ms"))
+            .unwrap_or_else(|| "—".into()),
+        loss = scan
+            .reachability
+            .packet_loss_pct
+            .map(|v| format!("{v:.0}%"))
+            .unwrap_or_else(|| "—".into()),
+        n_findings = scan.findings.len(),
+        findings = findings_html,
+        recs_section = if scan.recommendations.is_empty() {
+            String::new()
+        } else {
+            format!("<h2>Recommendations ({})</h2>{}", scan.recommendations.len(), recs_html)
+        },
+        n_devices = scan.devices.len(),
+        devices = devices_html,
+        services = service_html,
+        generated = Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+    )
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 // ── Demo data ─────────────────────────────────────────────────────────────────

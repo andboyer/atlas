@@ -226,6 +226,7 @@ mod tests {
             findings: vec![],
             recommendations: vec![],
             service_reachability: vec![],
+            captive_portal: false,
         }
     }
 

@@ -130,4 +130,7 @@ pub struct ScanResult {
     pub recommendations: Vec<Recommendation>,
     #[serde(default)]
     pub service_reachability: Vec<ServiceProbe>,
+    /// True when a captive portal was detected during this scan.
+    #[serde(default)]
+    pub captive_portal: bool,
 }
