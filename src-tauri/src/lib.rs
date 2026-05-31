@@ -29,6 +29,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let app_dir = app.path().app_data_dir().expect("app data dir resolvable");
             let db_path = app_dir.join("wifi-troubleshooter.sqlite");
@@ -56,6 +58,7 @@ pub fn run() {
             commands::get_payload_preview,
             commands::get_metric_history,
             commands::export_report,
+            commands::check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

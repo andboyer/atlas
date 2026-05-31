@@ -12,6 +12,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import ChannelMap from "./components/ChannelMap";
 import ChatPanel from "./components/ChatPanel";
 import OnboardingWizard from "./components/OnboardingWizard";
+import UpdateBanner from "./components/UpdateBanner";
 import { useApp } from "./store";
 
 function App() {
@@ -53,6 +54,7 @@ function App() {
 
   return (
     <div className="min-h-screen">
+      <UpdateBanner />
       <header className="border-b border-[var(--color-border)] bg-[var(--color-panel)]/80 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">

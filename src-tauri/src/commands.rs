@@ -493,6 +493,30 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+// ── Update check ──────────────────────────────────────────────────────────────
+
+/// Check if an application update is available.  Returns a JSON object with
+/// `available: bool` and optionally `version: String` and `body: String`.
+#[tauri::command]
+pub async fn check_for_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(serde_json::json!({
+            "available": true,
+            "version": update.version,
+            "body": update.body.unwrap_or_default(),
+        })),
+        Ok(None) => Ok(serde_json::json!({ "available": false })),
+        Err(e) => {
+            // Network errors (offline, endpoint unreachable) are non-fatal.
+            tracing::debug!("update check failed: {e}");
+            Ok(serde_json::json!({ "available": false, "error": e.to_string() }))
+        }
+    }
+}
+
 // ── Demo data ─────────────────────────────────────────────────────────────────
 
 pub fn demo_devices() -> Vec<DeviceInfo> {

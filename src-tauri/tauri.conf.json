@@ -32,6 +32,36 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Utility",
+    "copyright": "© 2026 Andre Boyer",
+    "shortDescription": "AI-assisted WiFi network troubleshooter",
+    "longDescription": "Continuously monitors your WiFi and LAN, detects complex network issues, and provides AI-powered actionable recommendations. Supports background monitoring, incident timeline, channel interference detection, and LLM-powered Q&A.",
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "entitlements": "entitlements.plist",
+      "exceptionDomain": null,
+      "signingIdentity": null,
+      "providerShortName": null
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "both"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-dev", "libssl-dev"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/andreboyer/wifi-troubleshooter/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": ""
+    }
   }
 }
