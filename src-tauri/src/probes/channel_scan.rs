@@ -11,6 +11,7 @@
 ///            RSSI for nearby networks, so CoreWLAN is the preferred path.
 ///   Linux  — `iw dev <iface> scan` (requires root or CAP_NET_RAW; silently empty if unavailable)
 ///   Windows — `netsh wlan show networks mode=bssid`
+use crate::process_util::NoConsoleExt;
 use crate::types::NearbyAp;
 use anyhow::Result;
 use tokio::process::Command;
@@ -48,6 +49,7 @@ async fn scan_platform() -> Result<Vec<NearbyAp>> {
     let out = timeout(
         Duration::from_secs(20),
         Command::new("system_profiler")
+            .no_console()
             .arg("SPAirPortDataType")
             .output(),
     )
@@ -61,7 +63,11 @@ async fn scan_platform() -> Result<Vec<NearbyAp>> {
 async fn scan_platform() -> Result<Vec<NearbyAp>> {
     use tokio::time::{timeout, Duration};
     // Detect the wireless interface.
-    let iface_out = Command::new("iw").arg("dev").output().await?;
+    let iface_out = Command::new("iw")
+        .no_console()
+        .arg("dev")
+        .output()
+        .await?;
     let iface_text = String::from_utf8_lossy(&iface_out.stdout).into_owned();
     let iface = iface_text
         .lines()
@@ -71,7 +77,10 @@ async fn scan_platform() -> Result<Vec<NearbyAp>> {
 
     let out = timeout(
         Duration::from_secs(15),
-        Command::new("iw").args(["dev", &iface, "scan"]).output(),
+        Command::new("iw")
+            .no_console()
+            .args(["dev", &iface, "scan"])
+            .output(),
     )
     .await??;
     Ok(parse_iw_scan(&String::from_utf8_lossy(&out.stdout)))
@@ -80,6 +89,7 @@ async fn scan_platform() -> Result<Vec<NearbyAp>> {
 #[cfg(target_os = "windows")]
 async fn scan_platform() -> Result<Vec<NearbyAp>> {
     let out = Command::new("netsh")
+        .no_console()
         .args(["wlan", "show", "networks", "mode=bssid"])
         .output()
         .await?;

@@ -1,4 +1,5 @@
 use super::WifiCollector;
+use crate::process_util::NoConsoleExt;
 use crate::types::{LinkStats, ReachabilityStats};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -10,6 +11,7 @@ pub struct WindowsCollector;
 impl WifiCollector for WindowsCollector {
     async fn link_stats(&self) -> Result<LinkStats> {
         let out = Command::new("netsh")
+            .no_console()
             .args(["wlan", "show", "interfaces"])
             .output()
             .await?;

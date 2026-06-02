@@ -1,3 +1,4 @@
+use crate::process_util::NoConsoleExt;
 use crate::types::ReachabilityStats;
 use anyhow::Result;
 use std::net::ToSocketAddrs;
@@ -36,6 +37,7 @@ pub async fn default_gateway() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         let out = Command::new("route")
+            .no_console()
             .args(["-n", "get", "default"])
             .output()
             .await
@@ -51,6 +53,7 @@ pub async fn default_gateway() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
         let out = Command::new("ip")
+            .no_console()
             .args(["route", "show", "default"])
             .output()
             .await
@@ -68,6 +71,7 @@ pub async fn default_gateway() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         let out = Command::new("powershell")
+            .no_console()
             .args([
                 "-NoProfile",
                 "-Command",
@@ -98,6 +102,7 @@ pub async fn ping_loss(host: &str, count: u32) -> Option<f32> {
 
 async fn run_ping(host: &str, count: u32) -> Option<String> {
     let mut cmd = Command::new("ping");
+    cmd.no_console();
     #[cfg(target_os = "windows")]
     cmd.args(["-n", &count.to_string(), "-w", "1000", host]);
     #[cfg(not(target_os = "windows"))]

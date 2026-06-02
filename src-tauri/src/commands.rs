@@ -1333,11 +1333,15 @@ async fn elevate_and_run_igmp(exe: &str) -> Result<String, String> {
         exe = ps_quote(exe),
         args = arg_list,
     );
-    let output = tokio::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
-        .output()
-        .await
-        .map_err(|e| format!("spawn powershell: {e}"))?;
+    let output = {
+        use crate::process_util::NoConsoleExt;
+        tokio::process::Command::new("powershell.exe")
+            .no_console()
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+            .output()
+            .await
+            .map_err(|e| format!("spawn powershell: {e}"))?
+    };
     if !output.status.success() {
         let _ = tokio::fs::remove_file(&out_path).await;
         let stderr = String::from_utf8_lossy(&output.stderr);

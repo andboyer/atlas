@@ -7,6 +7,7 @@ mod monitor;
 mod narrator;
 pub mod oui;
 pub mod probes;
+mod process_util;
 pub mod profiles;
 mod recommend;
 mod sampler;

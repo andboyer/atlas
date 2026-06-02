@@ -8,6 +8,7 @@
 /// PPPoE links have MTU 1492. 6in4 tunnels: 1472. OpenVPN: ~1400.
 ///
 /// A discovered MTU below 1400 is reported as a `low_mtu` finding.
+use crate::process_util::NoConsoleExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
@@ -89,7 +90,10 @@ async fn ping_size(host: &str, mtu: u32) -> bool {
 
     let result = timeout(
         Duration::from_secs(5),
-        Command::new("ping").args(&args).output(),
+        Command::new("ping")
+            .no_console()
+            .args(&args)
+            .output(),
     )
     .await;
 
