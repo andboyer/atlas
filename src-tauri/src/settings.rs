@@ -38,8 +38,14 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            scan_interval_secs: 120,
-            monitoring_enabled: false,
+            // Live-scanning default: a fresh scan every 15 s when monitoring is
+            // running. Each probe self-bounds at 20 s and the join budget is 45 s,
+            // so this gives the user near-real-time updates without overlapping
+            // runs. Operators can tune this in Settings.
+            scan_interval_secs: 15,
+            // Monitoring auto-starts on first launch; the UI surfaces a Pause
+            // button so the user can stop it at any time.
+            monitoring_enabled: true,
             notifications_enabled: true,
             notification_min_severity: "medium".to_string(),
             llm_provider: None,

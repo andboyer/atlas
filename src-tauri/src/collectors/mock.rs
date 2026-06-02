@@ -21,6 +21,9 @@ impl WifiCollector for MockCollector {
             tx_rate_mbps: Some(173.0),
             rx_rate_mbps: Some(195.0),
             security: Some("WPA2-Personal".into()),
+            phy_mode: Some("802.11ac".into()),
+            wifi_generation: None,
+            vendor: None,
         })
     }
 

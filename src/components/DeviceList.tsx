@@ -23,7 +23,7 @@ function fmtService(svc: string) {
 }
 
 export function DeviceList() {
-  const devices = useApp((s) => s.lastScan?.devices ?? []);
+  const devices = useApp((s) => s.lastScan?.devices) ?? [];
   if (devices.length === 0) {
     return (
       <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 text-sm text-[var(--color-muted)]">

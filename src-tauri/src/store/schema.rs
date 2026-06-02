@@ -52,4 +52,15 @@ CREATE TABLE IF NOT EXISTS findings (
     payload_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_findings_observed ON findings(observed_at);
+
+CREATE TABLE IF NOT EXISTS roaming_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT NOT NULL,
+    ssid TEXT,
+    from_bssid TEXT,
+    to_bssid TEXT,
+    rssi_at_roam INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_roaming_events_time
+    ON roaming_events(occurred_at);
 "#;

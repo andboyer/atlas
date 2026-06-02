@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  CFBundleIdentifier intentionally matches the PARENT app's bundle id
+	  (not a child id like com.andboyer.wifitroubleshooter.nearby-scan).
+	  TCC grants are keyed by the calling process's bundle identifier, so
+	  matching the parent means a single Location Services grant covers
+	  both the parent app and this helper. Without this, the user grants
+	  Location to "WiFi Troubleshooter" but the helper has its own TCC
+	  identity and still sees .notDetermined -> CoreWLAN returns nil SSIDs.
+	-->
+	<key>CFBundleIdentifier</key>
+	<string>com.andboyer.wifitroubleshooter</string>
+	<key>CFBundleName</key>
+	<string>WiFi Troubleshooter</string>
+	<key>CFBundleExecutable</key>
+	<string>nearby_scan</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSLocationUsageDescription</key>
+	<string>WiFi Troubleshooter uses your location to read nearby Wi-Fi network names (SSIDs) so it can detect channel interference, evil-twin APs, and recommend a better channel.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>WiFi Troubleshooter uses your location to read nearby Wi-Fi network names (SSIDs) so it can detect channel interference, evil-twin APs, and recommend a better channel.</string>
+	<key>LSUIElement</key>
+	<true/>
+</dict>
+</plist>

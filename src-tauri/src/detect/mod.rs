@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 pub mod anomaly;
 pub mod rules;
+pub mod trends;
 
 pub use anomaly::AnomalySignal;
 

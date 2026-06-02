@@ -37,6 +37,7 @@ fn parse_system_profiler(s: &str) -> LinkStats {
     let mut rssi: Option<i32> = None;
     let mut noise: Option<i32> = None;
     let mut tx_rate: Option<f32> = None;
+    let mut phy_mode: Option<String> = None;
 
     let mut in_current = false;
     let mut took_ssid = false;
@@ -97,6 +98,8 @@ fn parse_system_profiler(s: &str) -> LinkStats {
             }
         } else if let Some(v) = trimmed.strip_prefix("Transmit Rate: ") {
             tx_rate = v.parse::<f32>().ok();
+        } else if let Some(v) = trimmed.strip_prefix("PHY Mode: ") {
+            phy_mode = Some(v.to_string());
         }
     }
 
@@ -117,6 +120,9 @@ fn parse_system_profiler(s: &str) -> LinkStats {
         tx_rate_mbps: tx_rate,
         rx_rate_mbps: None,
         security,
+        phy_mode,
+        wifi_generation: None,
+        vendor: None,
     }
 }
 

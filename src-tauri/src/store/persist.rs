@@ -404,6 +404,72 @@ impl super::Store {
             None => Ok(None),
         }
     }
+
+    /// Return the (ssid, bssid) from the most-recent persisted scan, or `None`
+    /// if the runs table is empty / the latest run has no full_json blob.
+    /// Used by the BSSID-change detector that backs roaming history.
+    pub fn last_link_identity(&self) -> Result<Option<(Option<String>, Option<String>)>> {
+        let guard = self.conn.lock();
+        let json: Option<String> = guard
+            .query_row(
+                "SELECT full_json FROM runs WHERE full_json IS NOT NULL \
+                 ORDER BY started_at DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match json.as_deref() {
+            Some(s) => {
+                let scan: ScanResult = serde_json::from_str(s)?;
+                Ok(Some((scan.link.ssid, scan.link.bssid)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Persist a roaming event (BSSID change while staying on the same SSID).
+    pub fn record_roaming_event(&self, evt: &crate::types::RoamingEvent) -> Result<()> {
+        let guard = self.conn.lock();
+        guard.execute(
+            "INSERT INTO roaming_events (occurred_at, ssid, from_bssid, to_bssid, rssi_at_roam) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                evt.at.to_rfc3339(),
+                evt.ssid,
+                evt.from_bssid,
+                evt.to_bssid,
+                evt.rssi_at_roam_dbm,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Return roaming events whose `occurred_at` is at or after `since`,
+    /// ordered oldest-first (so callers can compute dwell-times by walking
+    /// adjacent pairs).
+    pub fn roaming_events_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<crate::types::RoamingEvent>> {
+        let guard = self.conn.lock();
+        let mut stmt = guard.prepare(
+            "SELECT occurred_at, ssid, from_bssid, to_bssid, rssi_at_roam \
+             FROM roaming_events WHERE occurred_at >= ?1 ORDER BY occurred_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![since.to_rfc3339()], |row| {
+                let at_s: String = row.get(0)?;
+                Ok(crate::types::RoamingEvent {
+                    at: parse_dt(&at_s),
+                    ssid: row.get(1)?,
+                    from_bssid: row.get(2)?,
+                    to_bssid: row.get(3)?,
+                    rssi_at_roam_dbm: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
 }
 
 #[derive(Debug, Default, Serialize, serde::Deserialize)]
@@ -494,6 +560,9 @@ mod tests {
             tx_rate_mbps: Some(866.0),
             rx_rate_mbps: None,
             security: Some("WPA2".into()),
+            phy_mode: Some("802.11ac".into()),
+            wifi_generation: None,
+            vendor: None,
         }
     }
 
@@ -540,6 +609,14 @@ mod tests {
             mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
+            quality: None,
+            interference: None,
+            phy_efficiency: None,
+            roaming: None,
+            rogue_aps: vec![],
+            wan: None,
+            trends: None,
+            alternate_ap: None,
         }
     }
 

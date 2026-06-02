@@ -4,12 +4,17 @@
 /// interference on 2.4 GHz (channels 1–14) and 5 GHz (channels 36–177).
 ///
 /// Platform implementations:
-///   macOS  — `/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s`
+///   macOS  — native CoreWLAN via objc2 (see `macos_corewlan.rs`), falling
+///            back to `system_profiler SPAirPortDataType` if CoreWLAN is
+///            unavailable. The legacy `airport -s` binary was removed in
+///            macOS 14.4 and modern `system_profiler` no longer emits per-AP
+///            RSSI for nearby networks, so CoreWLAN is the preferred path.
 ///   Linux  — `iw dev <iface> scan` (requires root or CAP_NET_RAW; silently empty if unavailable)
 ///   Windows — `netsh wlan show networks mode=bssid`
 use crate::types::NearbyAp;
 use anyhow::Result;
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 /// Returns a list of nearby APs visible from this device.
 pub async fn scan_nearby() -> Vec<NearbyAp> {
@@ -18,13 +23,38 @@ pub async fn scan_nearby() -> Vec<NearbyAp> {
 
 #[cfg(target_os = "macos")]
 async fn scan_platform() -> Result<Vec<NearbyAp>> {
-    let out = Command::new(
-        "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport",
+    // Prefer the native in-process CoreWLAN scan. Modern macOS (Sonoma+)
+    // no longer emits `Signal / Noise:` lines for nearby APs in
+    // `system_profiler`, so RSSI would otherwise be null for every entry
+    // and the spectrum chart would render every AP at the floor (flat
+    // -100 dBm baseline). We must call CoreWLAN from the parent process
+    // (not a child helper) so the scan inherits the parent app's
+    // Location Services grant — TCC keys grants by binary cdhash and a
+    // child helper cannot share the parent's grant.
+    match tokio::task::spawn_blocking(crate::probes::macos_corewlan::scan_blocking).await {
+        Ok(Ok(aps)) if !aps.is_empty() => return Ok(aps),
+        Ok(Ok(_)) => {
+            // CoreWLAN returned zero networks — fall through to
+            // system_profiler in case the scan ran too soon after wake.
+        }
+        Ok(Err(e)) => {
+            tracing::debug!("native CoreWLAN scan failed, falling back to system_profiler: {e}");
+        }
+        Err(join_err) => {
+            tracing::debug!("native CoreWLAN task panicked: {join_err}");
+        }
+    }
+
+    let out = timeout(
+        Duration::from_secs(20),
+        Command::new("system_profiler")
+            .arg("SPAirPortDataType")
+            .output(),
     )
-    .arg("-s")
-    .output()
-    .await?;
-    Ok(parse_airport_scan(&String::from_utf8_lossy(&out.stdout)))
+    .await??;
+    Ok(parse_system_profiler_networks(
+        &String::from_utf8_lossy(&out.stdout),
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -61,73 +91,140 @@ async fn scan_platform() -> Result<Vec<NearbyAp>> {
     Ok(vec![])
 }
 
-// ─── Parser: macOS airport -s ────────────────────────────────────────────────
+// ─── Parser: macOS system_profiler SPAirPortDataType ─────────────────────────
 //
-// Header line:    SSID BSSID             RSSI CHANNEL HT CC SECURITY (auth/unicast/group)
-// Example line:   MyNet a4:c3:f0:11:22:33  -57  6,+1    Y  US WPA2(PSK/AES/AES)
+// The "Other Local Wi-Fi Networks:" subsection of `system_profiler
+// SPAirPortDataType` lists every visible AP with indented `Field: Value` pairs:
+//
+//   Other Local Wi-Fi Networks:
+//     CafeFi:
+//       PHY Mode: 802.11n
+//       Channel: 11 (2GHz, 20MHz)
+//       Network Type: Infrastructure
+//       Security: WPA2 Personal
+//       Signal / Noise: -71 dBm / -94 dBm
+//     NeighborNet:
+//       Channel: 6 (2GHz, 20MHz)
+//       ...
+//
+// system_profiler never exposes BSSIDs (Apple privacy), so `bssid` is always None.
 
 #[cfg(target_os = "macos")]
-fn parse_airport_scan(s: &str) -> Vec<NearbyAp> {
-    let mut aps = Vec::new();
-    let mut in_data = false;
-    for line in s.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("SSID") && trimmed.contains("BSSID") {
-            in_data = true;
+fn parse_system_profiler_networks(s: &str) -> Vec<NearbyAp> {
+    let mut aps: Vec<NearbyAp> = Vec::new();
+    let mut current: Option<NearbyAp> = None;
+    let mut in_others = false;
+    let mut ssid_indent: usize = 0;
+    let mut redacted_seq: u32 = 0;
+
+    for raw in s.lines() {
+        let indent = raw.chars().take_while(|c| c.is_whitespace()).count();
+        let trimmed = raw.trim();
+
+        if trimmed.starts_with("Other Local Wi-Fi Networks:") {
+            if let Some(ap) = current.take() {
+                aps.push(ap);
+            }
+            in_others = true;
+            ssid_indent = 0;
             continue;
         }
-        if !in_data || trimmed.is_empty() {
+        if !in_others {
             continue;
         }
-        // airport -s output is fixed-width. The SSID occupies the first 32 chars,
-        // BSSID is the next 18, RSSI is next, then channel.
-        // Use whitespace splitting from the right to avoid SSID ambiguity.
-        // Format (right-anchored after BSSID):  <bssid> <rssi> <channel> ...
-        let parts = line.split_whitespace();
-        // Collect tokens; last tokens are: CHANNEL HT CC SECURITY...
-        // The BSSID token always matches xx:xx:xx:xx:xx:xx
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        let bssid_idx = tokens.iter().position(|t| {
-            t.len() == 17 && t.chars().filter(|&c| c == ':').count() == 5
-        });
-        let bssid_idx = match bssid_idx {
-            Some(i) => i,
-            None => continue,
-        };
+        // A new top-level section (less or equal indent than the "Other Local..."
+        // header itself, which is typically 8 spaces) ends the block. We approximate
+        // this by exiting when we see a non-indented unrelated section header.
+        // In practice system_profiler emits one section per data type, and the
+        // SPAirPortDataType output ends with the networks block, so this is safe.
+        if trimmed.is_empty() {
+            continue;
+        }
 
-        let ssid_tokens = &tokens[..bssid_idx];
-        let ssid = if ssid_tokens.is_empty() {
-            None
-        } else {
-            Some(ssid_tokens.join(" "))
-        };
-        let bssid = Some(tokens[bssid_idx].to_string());
+        // SSID line: ends with ':' and contains no other ':' field separator pattern.
+        // e.g. "  CafeFi:" — but skip things like "Network Type:" (those have a value).
+        if trimmed.ends_with(':') && !trimmed.contains(": ") {
+            if let Some(ap) = current.take() {
+                aps.push(ap);
+            }
+            let name = trimmed.trim_end_matches(':').to_string();
+            // macOS hides SSIDs as "<redacted>" when the calling process lacks
+            // Location Services permission (the Wi-Fi privacy gate introduced
+            // in macOS Sonoma). Synthesize a stable label so the AP is still
+            // distinguishable in the spectrum chart and the table, and flag it.
+            let (ssid, name_redacted) = if name == "<redacted>" {
+                redacted_seq += 1;
+                (Some(format!("Network {redacted_seq}")), true)
+            } else {
+                (Some(name), false)
+            };
+            current = Some(NearbyAp {
+                ssid,
+                bssid: None,
+                channel: None,
+                band: None,
+                rssi_dbm: None,
+                security: None,
+                phy_mode: None,
+                width_mhz: None,
+                vendor: None,
+                name_redacted,
+            });
+            ssid_indent = indent;
+            continue;
+        }
 
-        let rssi: Option<i32> = tokens
-            .get(bssid_idx + 1)
-            .and_then(|v| v.parse().ok());
-
-        // Channel field: "6", "6,+1", "36", "36,80"
-        let (channel, band) = tokens
-            .get(bssid_idx + 2)
-            .map(|c| {
-                let num_str = c.split(',').next().unwrap_or(c);
-                let ch = num_str.parse::<u32>().ok();
-                let band = ch.map(|n| {
-                    if n <= 14 {
-                        "2.4".to_string()
-                    } else {
-                        "5".to_string()
+        // Field line under an SSID — must be more indented than the SSID itself.
+        if let Some(ref mut ap) = current {
+            if indent <= ssid_indent {
+                // Same- or lower-indent line that isn't an SSID → we've left this AP.
+                aps.push(current.take().unwrap());
+                continue;
+            }
+            if let Some(v) = trimmed.strip_prefix("Channel: ") {
+                // e.g. "11 (2GHz, 20MHz)" or "157 (5GHz, 80MHz)"
+                let (num, rest) = v.split_once(' ').unwrap_or((v, ""));
+                ap.channel = num.parse::<u32>().ok();
+                if let Some(open) = rest.find('(') {
+                    let inner = &rest[open + 1..rest.rfind(')').unwrap_or(rest.len())];
+                    let mut parts = inner.split(',').map(|p| p.trim());
+                    if let Some(band_str) = parts.next() {
+                        ap.band = Some(match band_str {
+                            "2GHz" | "2.4GHz" => "2.4".to_string(),
+                            "5GHz" => "5".to_string(),
+                            "6GHz" => "6".to_string(),
+                            other => other.to_string(),
+                        });
                     }
-                });
-                (ch, band)
-            })
-            .unwrap_or((None, None));
+                    if let Some(width_str) = parts.next() {
+                        ap.width_mhz = width_str.trim_end_matches("MHz").parse::<u32>().ok();
+                    }
+                }
+                // Fallback band from channel number if the parens were missing.
+                if ap.band.is_none() {
+                    ap.band = ap.channel.map(|n| {
+                        if n <= 14 {
+                            "2.4".to_string()
+                        } else {
+                            "5".to_string()
+                        }
+                    });
+                }
+            } else if let Some(v) = trimmed.strip_prefix("Signal / Noise: ") {
+                // e.g. "-71 dBm / -94 dBm"
+                if let Some(rssi_part) = v.split('/').next() {
+                    ap.rssi_dbm = rssi_part.trim().trim_end_matches(" dBm").parse::<i32>().ok();
+                }
+            } else if let Some(v) = trimmed.strip_prefix("Security: ") {
+                ap.security = Some(v.to_string());
+            } else if let Some(v) = trimmed.strip_prefix("PHY Mode: ") {
+                ap.phy_mode = Some(v.to_string());
+            }
+        }
+    }
 
-        // Fix the unused `parts` variable lint
-        let _ = parts;
-
-        aps.push(NearbyAp { ssid, bssid, channel, band, rssi_dbm: rssi });
+    if let Some(ap) = current.take() {
+        aps.push(ap);
     }
     aps
 }
@@ -155,6 +252,11 @@ fn parse_iw_scan(s: &str) -> Vec<NearbyAp> {
                 channel: None,
                 band: None,
                 rssi_dbm: None,
+                security: None,
+                phy_mode: None,
+                width_mhz: None,
+                vendor: None,
+                name_redacted: false,
             });
         } else if let Some(ref mut ap) = current {
             if let Some(v) = t.strip_prefix("SSID: ") {
@@ -197,6 +299,11 @@ fn parse_netsh_scan(s: &str) -> Vec<NearbyAp> {
                 channel: None,
                 band: None,
                 rssi_dbm: None,
+                security: None,
+                phy_mode: None,
+                width_mhz: None,
+                vendor: None,
+                name_redacted: false,
             });
         } else if let Some(ref mut ap) = current {
             if t.starts_with("BSSID") {
@@ -266,19 +373,77 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn parses_airport_scan_output() {
+    fn parses_system_profiler_networks() {
         let sample = concat!(
-            "                            SSID BSSID             RSSI CHANNEL HT CC SECURITY (auth/unicast/group)\n",
-            "                        HomeNet a4:c3:f0:11:22:33  -45       6   Y  US WPA2(PSK/AES/AES)\n",
-            "                        OfficeAP b4:e9:4a:44:55:66  -72      36,80  Y  US WPA2(PSK/AES/AES)\n",
+            "Wi-Fi:\n",
+            "      Software Versions:\n",
+            "        CoreWLAN: 16.0\n",
+            "      Interfaces:\n",
+            "        en0:\n",
+            "          Status: Connected\n",
+            "        Other Local Wi-Fi Networks:\n",
+            "          HomeNet:\n",
+            "            PHY Mode: 802.11n\n",
+            "            Channel: 6 (2GHz, 20MHz)\n",
+            "            Network Type: Infrastructure\n",
+            "            Security: WPA2 Personal\n",
+            "            Signal / Noise: -45 dBm / -94 dBm\n",
+            "          OfficeAP:\n",
+            "            PHY Mode: 802.11ac\n",
+            "            Channel: 36 (5GHz, 80MHz)\n",
+            "            Signal / Noise: -72 dBm / -94 dBm\n",
+            "          <redacted>:\n",
+            "            Channel: 11 (2GHz, 20MHz)\n",
+            "            Signal / Noise: -80 dBm / -94 dBm\n",
         );
-        let aps = parse_airport_scan(sample);
-        assert_eq!(aps.len(), 2);
+        let aps = parse_system_profiler_networks(sample);
+        assert_eq!(aps.len(), 3, "expected 3 nearby APs, got {aps:?}");
         assert_eq!(aps[0].ssid.as_deref(), Some("HomeNet"));
         assert_eq!(aps[0].channel, Some(6));
         assert_eq!(aps[0].band.as_deref(), Some("2.4"));
         assert_eq!(aps[0].rssi_dbm, Some(-45));
+        assert_eq!(aps[0].security.as_deref(), Some("WPA2 Personal"));
+        assert_eq!(aps[0].phy_mode.as_deref(), Some("802.11n"));
+        assert_eq!(aps[0].width_mhz, Some(20));
+        assert_eq!(aps[1].ssid.as_deref(), Some("OfficeAP"));
         assert_eq!(aps[1].channel, Some(36));
         assert_eq!(aps[1].band.as_deref(), Some("5"));
+        assert_eq!(aps[1].rssi_dbm, Some(-72));
+        assert_eq!(aps[1].width_mhz, Some(80));
+        assert_eq!(aps[1].phy_mode.as_deref(), Some("802.11ac"));
+        assert!(
+            !aps[0].name_redacted && !aps[1].name_redacted,
+            "non-redacted entries should not be flagged"
+        );
+        assert_eq!(
+            aps[2].ssid.as_deref(),
+            Some("Network 1"),
+            "redacted SSIDs get a synthesized label"
+        );
+        assert!(aps[2].name_redacted, "redacted SSIDs are flagged");
+        assert_eq!(aps[2].channel, Some(11));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn redacted_ssids_get_distinct_labels() {
+        let sample = concat!(
+            "        Other Local Wi-Fi Networks:\n",
+            "          <redacted>:\n",
+            "            Channel: 1 (2GHz, 20MHz)\n",
+            "            Signal / Noise: -60 dBm / -94 dBm\n",
+            "          <redacted>:\n",
+            "            Channel: 6 (2GHz, 20MHz)\n",
+            "            Signal / Noise: -70 dBm / -94 dBm\n",
+            "          <redacted>:\n",
+            "            Channel: 149 (5GHz, 80MHz)\n",
+            "            Signal / Noise: -55 dBm / -94 dBm\n",
+        );
+        let aps = parse_system_profiler_networks(sample);
+        assert_eq!(aps.len(), 3);
+        assert_eq!(aps[0].ssid.as_deref(), Some("Network 1"));
+        assert_eq!(aps[1].ssid.as_deref(), Some("Network 2"));
+        assert_eq!(aps[2].ssid.as_deref(), Some("Network 3"));
+        assert!(aps.iter().all(|a| a.name_redacted));
     }
 }

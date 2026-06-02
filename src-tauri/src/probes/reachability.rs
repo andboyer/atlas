@@ -7,13 +7,21 @@ use tokio::time::{timeout, Duration};
 
 pub async fn collect() -> Result<ReachabilityStats> {
     let gateway = default_gateway().await;
-    let gateway_latency = match &gateway {
-        Some(ip) => ping(ip, 3).await,
-        None => None,
-    };
-    let internet_latency = ping("1.1.1.1", 3).await;
-    let dns_latency = dns_resolve_ms("apple.com").await;
-    let packet_loss = ping_loss("1.1.1.1", 10).await;
+
+    // Run the four network probes concurrently — sequential execution previously
+    // summed to ~20s+ (10-packet ping_loss alone is ~10s) which hung the UI.
+    let gw_for_ping = gateway.clone();
+    let (gateway_latency, internet_latency, dns_latency, packet_loss) = tokio::join!(
+        async {
+            match gw_for_ping {
+                Some(ip) => ping(&ip, 3).await,
+                None => None,
+            }
+        },
+        ping("1.1.1.1", 3),
+        dns_resolve_ms("apple.com"),
+        ping_loss("1.1.1.1", 5),
+    );
 
     Ok(ReachabilityStats {
         gateway_ip: gateway,
@@ -157,14 +165,20 @@ fn parse_ping_loss(s: &str) -> Option<f32> {
 pub async fn dns_resolve_ms(host: &str) -> Option<f32> {
     let host = host.to_string();
     let started = Instant::now();
-    let resolved = tokio::task::spawn_blocking(move || {
-        let addr = format!("{host}:443");
-        addr.to_socket_addrs()
-            .ok()
-            .and_then(|mut it| it.next())
-            .is_some()
-    })
+    // Bound to ~5s — system to_socket_addrs has no native timeout and can hang
+    // on a flaky resolver, which would block the whole reachability join.
+    let resolved = timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || {
+            let addr = format!("{host}:443");
+            addr.to_socket_addrs()
+                .ok()
+                .and_then(|mut it| it.next())
+                .is_some()
+        }),
+    )
     .await
+    .ok()?
     .ok()?;
     if resolved {
         Some(started.elapsed().as_secs_f32() * 1000.0)

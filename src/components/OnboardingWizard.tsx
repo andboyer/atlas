@@ -66,7 +66,9 @@ const PROFILES: Profile[] = [
 const TOTAL_STEPS = 4;
 
 export default function OnboardingWizard({ onComplete }: Props) {
-  const { settings, saveSettings, runQuickScan } = useApp();
+  const settings = useApp((s) => s.settings);
+  const saveSettings = useApp((s) => s.saveSettings);
+  const runQuickScan = useApp((s) => s.runQuickScan);
 
   const [step, setStep] = useState(1);
   const [profile, setProfile] = useState(settings?.industry_profile ?? "home");

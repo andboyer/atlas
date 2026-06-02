@@ -55,26 +55,53 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
     let collector = default_collector();
 
     let started_at = Utc::now();
-    let link = collector.link_stats().await.ok()?;
+    let mut link = collector.link_stats().await.ok()?;
     let reach = collector.reachability().await.ok()?;
 
     let settings = Settings::load(&state.settings_path).unwrap_or_default();
     let profile = crate::commands::profile_hints_from(&settings);
     let targets = crate::commands::effective_targets(&settings);
 
-    let (mut devices, services, captive_portal, dns_leak, mtu_bytes, nearby_aps, speed_mbps) =
-        tokio::join!(
-            crate::discovery::scan::discover_and_probe(),
-            crate::probes::services::probe_services(&targets),
-            crate::probes::captive::is_captive_portal(),
-            crate::probes::dns_leak::is_dns_leak(),
-            crate::probes::mtu::discover_mtu(),
-            crate::probes::channel_scan::scan_nearby(),
-            crate::probes::speed_test::measure_download_mbps(),
-        );
+    let (
+        mut devices,
+        services,
+        captive_portal,
+        dns_leak,
+        mtu_bytes,
+        nearby_aps,
+        speed_mbps,
+        wan,
+    ) = tokio::join!(
+        crate::discovery::scan::discover_and_probe(),
+        crate::probes::services::probe_services(&targets),
+        crate::probes::captive::is_captive_portal(),
+        crate::probes::dns_leak::is_dns_leak(),
+        crate::probes::mtu::discover_mtu(),
+        crate::probes::channel_scan::scan_nearby(),
+        crate::probes::speed_test::measure_download_mbps(),
+        crate::probes::wan::probe_wan(),
+    );
+    // Bufferbloat / networkQuality is on-demand only (see run_quality_test);
+    // it takes 40-50 s and would dominate the monitor interval.
+    let quality: Option<crate::types::QualityStats> = None;
     if devices.is_empty() {
         devices = crate::commands::demo_devices();
     }
+    let mut nearby_aps = nearby_aps;
+    for ap in &mut nearby_aps {
+        if let Some(bssid) = ap.bssid.as_deref() {
+            ap.vendor = crate::oui::lookup(bssid).map(str::to_string);
+        }
+    }
+    link.vendor = link
+        .bssid
+        .as_deref()
+        .and_then(crate::oui::lookup)
+        .map(str::to_string);
+    link.wifi_generation = crate::wifi_gen::wifi_generation(
+        link.phy_mode.as_deref(),
+        link.band.as_deref(),
+    );
 
     let anomalies: Vec<AnomalySignal> =
         detect::anomaly::compute_anomalies(&state.store);
@@ -94,6 +121,47 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
     });
     let recommendations = detect::collect_recommendations(&findings);
 
+    let interference = Some(crate::probes::interference::build_report(
+        &nearby_aps,
+        link.channel,
+    ));
+    let phy_efficiency = crate::probes::phy_efficiency::evaluate(&link);
+    let rogue_aps = crate::probes::rogue::detect(&nearby_aps);
+
+    if let (Some(cur_bssid), Some(cur_ssid)) = (link.bssid.as_ref(), link.ssid.as_ref()) {
+        if let Ok(Some((prev_ssid, prev_bssid))) = state.store.last_link_identity() {
+            if prev_ssid.as_deref() == Some(cur_ssid.as_str())
+                && prev_bssid.is_some()
+                && prev_bssid.as_deref() != Some(cur_bssid.as_str())
+            {
+                let evt = crate::types::RoamingEvent {
+                    at: Utc::now(),
+                    ssid: Some(cur_ssid.clone()),
+                    from_bssid: prev_bssid.clone(),
+                    to_bssid: Some(cur_bssid.clone()),
+                    rssi_at_roam_dbm: link.rssi_dbm,
+                };
+                if let Err(e) = state.store.record_roaming_event(&evt) {
+                    tracing::warn!("monitor: failed to persist roaming event: {e:#}");
+                }
+            }
+        }
+    }
+
+    let roaming = {
+        let day_ago = Utc::now() - chrono::Duration::hours(24);
+        match state.store.roaming_events_since(day_ago) {
+            Ok(events) => Some(crate::probes::roaming::summarise(&events, &link)),
+            Err(e) => {
+                tracing::warn!("monitor: failed to load roaming history: {e:#}");
+                None
+            }
+        }
+    };
+
+    let trends = crate::detect::trends::build_report(&state.store, &link, &reach);
+    let alternate_ap = crate::wifi_gen::alternate_ap(&link, &nearby_aps);
+
     let result = ScanResult {
         run_id: Uuid::new_v4().to_string(),
         started_at,
@@ -109,6 +177,14 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         mtu_bytes,
         nearby_aps,
         speed_mbps,
+        quality,
+        interference,
+        phy_efficiency,
+        roaming,
+        rogue_aps,
+        wan,
+        trends,
+        alternate_ap,
     };
 
     if let Err(e) = state.store.record_scan(&result) {

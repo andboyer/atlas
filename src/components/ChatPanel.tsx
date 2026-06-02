@@ -34,7 +34,10 @@ export default function ChatPanel({ scanResult }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const hasApiKey = !!(settings?.llm_api_key);
+  // Local providers (Ollama) don't need an API key; remote providers do.
+  const provider = settings?.llm_provider ?? null;
+  const isLocalProvider = provider === "ollama";
+  const llmConfigured = isLocalProvider || !!settings?.llm_api_key;
 
   useEffect(() => {
     if (open && bottomRef.current) {
@@ -106,13 +109,13 @@ export default function ChatPanel({ scanResult }: Props) {
 
       {open && (
         <div className="border-t border-gray-100 dark:border-gray-700">
-          {!hasApiKey ? (
+          {!llmConfigured ? (
             <div className="px-4 py-6 text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
-                No LLM API key configured.
+                No LLM provider configured.
               </p>
               <p className="text-xs text-gray-400 dark:text-gray-500">
-                Open <span className="font-mono">Settings</span> and add an OpenAI or Anthropic key to enable AI chat.
+                Open <span className="font-mono">Settings</span> and choose an OpenAI / Anthropic key, or Ollama (local).
               </p>
             </div>
           ) : (

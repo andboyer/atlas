@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useApp } from "../store";
 import type { Settings } from "../types";
 
@@ -37,13 +38,13 @@ const PROFILES = [
 ];
 
 export function SettingsPanel({ onClose }: Props) {
-  const { settings, saveSettings, startMonitoring, stopMonitoring, monitoring } = useApp((s) => ({
+  const { settings, saveSettings, startMonitoring, stopMonitoring, monitoring } = useApp(useShallow((s) => ({
     settings: s.settings,
     saveSettings: s.saveSettings,
     startMonitoring: s.startMonitoring,
     stopMonitoring: s.stopMonitoring,
     monitoring: s.monitoring,
-  }));
+  })));
 
   const [draft, setDraft] = useState<Settings>(settings);
   const [saving, setSaving] = useState(false);

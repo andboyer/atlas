@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    macOS Sonoma+ gates nearby Wi-Fi SSID/BSSID visibility behind Location
+    Services. Without this key + a user grant, system_profiler returns
+    <redacted> for every nearby AP and the spectrum view loses its labels.
+  -->
+  <key>NSLocationUsageDescription</key>
+  <string>WiFi Troubleshooter uses your location to read nearby Wi-Fi network names (SSIDs) so it can detect channel interference, evil-twin APs, and recommend a better channel.</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>WiFi Troubleshooter uses your location to read nearby Wi-Fi network names (SSIDs) so it can detect channel interference, evil-twin APs, and recommend a better channel.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>WiFi Troubleshooter scans the local network to discover devices (routers, switches, cameras, printers) and measure latency to the gateway.</string>
+</dict>
+</plist>

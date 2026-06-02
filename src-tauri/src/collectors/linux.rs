@@ -97,6 +97,9 @@ fn parse_iw_output(link: &str, info: &str) -> LinkStats {
         tx_rate_mbps: tx_rate,
         rx_rate_mbps: rx_rate,
         security: None, // `iw` does not expose security type; could query nmcli
+        phy_mode: None,
+        wifi_generation: None,
+        vendor: None,
     }
 }
 

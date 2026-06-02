@@ -68,6 +68,9 @@ fn parse_netsh_interfaces(s: &str) -> LinkStats {
         tx_rate_mbps: tx_rate,
         rx_rate_mbps: rx_rate,
         security,
+        phy_mode: None,
+        wifi_generation: None,
+        vendor: None,
     }
 }
 

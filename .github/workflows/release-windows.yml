@@ -1,0 +1,104 @@
+name: Build Windows installer
+
+# Manual trigger (Actions tab → "Run workflow") OR push a `v*` tag to
+# auto-build and attach the installer to the matching GitHub Release.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional: attach artifacts to an existing release (e.g. v0.1.0). Leave blank for artifact-only build."
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri (NSIS + MSI)
+        # `tauri build` on windows-latest produces:
+        #   src-tauri/target/release/bundle/nsis/*.exe   (one-click installer)
+        #   src-tauri/target/release/bundle/msi/*.msi    (group-policy friendly)
+        run: pnpm tauri build
+
+      - name: Locate installer artifacts
+        id: artifacts
+        shell: pwsh
+        run: |
+          $nsis = Get-ChildItem -Path src-tauri/target/release/bundle/nsis -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          $msi  = Get-ChildItem -Path src-tauri/target/release/bundle/msi  -Filter *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $nsis -and -not $msi) {
+            Write-Error "No NSIS .exe or MSI .msi produced. Check tauri build output."
+            exit 1
+          }
+          if ($nsis) {
+            "nsis_path=$($nsis.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "nsis_name=$($nsis.Name)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "NSIS: $($nsis.FullName)"
+          }
+          if ($msi) {
+            "msi_path=$($msi.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "msi_name=$($msi.Name)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "MSI:  $($msi.FullName)"
+          }
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WiFi-Troubleshooter-Windows-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      # Attach to release only when a tag triggered this run OR the user
+      # supplied a release_tag input on a manual dispatch.
+      - name: Resolve release tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = ""
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            $tag = $env:GITHUB_REF -replace "refs/tags/", ""
+          } elseif ("${{ github.event.inputs.release_tag }}") {
+            $tag = "${{ github.event.inputs.release_tag }}"
+          }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Release tag: $tag"
+
+      - name: Attach to GitHub Release
+        if: steps.tag.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          fail_on_unmatched_files: false

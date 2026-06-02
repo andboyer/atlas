@@ -1,13 +1,19 @@
-import { Wifi, WifiOff, Loader2 } from "lucide-react";
+import { Wifi, WifiOff } from "lucide-react";
 import { useApp } from "../store";
+import { LivePauseControl } from "./LivePauseControl";
 
 export function StatusCard() {
-  const { lastScan, scanning, error, runQuickScan } = useApp();
+  const lastScan = useApp((s) => s.lastScan);
+  const scanning = useApp((s) => s.scanning);
+  const monitoring = useApp((s) => s.monitoring);
+  const error = useApp((s) => s.error);
 
   const ssid = lastScan?.link.ssid;
   const rssi = lastScan?.link.rssi_dbm;
   const band = lastScan?.link.band;
   const channel = lastScan?.link.channel;
+  const wifiGen = lastScan?.link.wifi_generation;
+  const vendor = lastScan?.link.vendor;
   const speedMbps = lastScan?.speed_mbps ?? null;
   const findings = lastScan?.findings ?? [];
   const worst = findings.reduce<string>((acc, f) => {
@@ -15,15 +21,17 @@ export function StatusCard() {
     return order.indexOf(f.severity) > order.indexOf(acc) ? f.severity : acc;
   }, "info");
 
-  const headline = scanning
-    ? "Scanning…"
-    : !lastScan
-      ? "Ready to scan"
-      : worst === "info" || worst === "low"
-        ? "Your network looks healthy"
-        : worst === "medium"
-          ? "Minor issues detected"
-          : "Action recommended";
+  const headline = !lastScan
+    ? scanning
+      ? "Scanning your network\u2026"
+      : monitoring
+        ? "Initialising live scan\u2026"
+        : "Live scan paused"
+    : worst === "info" || worst === "low"
+      ? "Your network looks healthy"
+      : worst === "medium"
+        ? "Minor issues detected"
+        : "Action recommended";
 
   return (
     <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6">
@@ -50,22 +58,29 @@ export function StatusCard() {
                   )}
                 </>
               ) : (
-                "Run a quick scan to inspect your WiFi link, internet path, and devices."
+                "Watching your WiFi link, internet path, and devices in real time."
               )}
             </p>
+            {(wifiGen || vendor) && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {wifiGen && (
+                  <span className="rounded-full bg-[var(--color-panel-2)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-accent)]">
+                    {wifiGen}
+                  </span>
+                )}
+                {vendor && (
+                  <span className="rounded-full bg-[var(--color-panel-2)] px-2.5 py-0.5 text-xs text-[var(--color-muted)]">
+                    AP: {vendor}
+                  </span>
+                )}
+              </div>
+            )}
             {error && (
               <p className="mt-2 text-sm text-[var(--color-bad)]">{error}</p>
             )}
           </div>
         </div>
-        <button
-          disabled={scanning}
-          onClick={runQuickScan}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-slate-900 transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {scanning && <Loader2 className="h-4 w-4 animate-spin" />}
-          {scanning ? "Scanning" : "Run quick scan"}
-        </button>
+        <LivePauseControl />
       </div>
     </div>
   );

@@ -912,6 +912,9 @@ mod tests {
             tx_rate_mbps: None,
             rx_rate_mbps: None,
             security: None,
+            phy_mode: None,
+            wifi_generation: None,
+            vendor: None,
         }
     }
 

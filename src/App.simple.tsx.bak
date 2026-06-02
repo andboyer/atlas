@@ -1,0 +1,28 @@
+import { useEffect } from "react";
+import { useApp } from "./store";
+import { StatusCard } from "./components/StatusCard";
+import { FindingsList } from "./components/FindingsList";
+import { ModeToggle } from "./components/ModeToggle";
+
+function App() {
+  const loadSettings = useApp((s) => s.loadSettings);
+  const subscribeToScanEvents = useApp((s) => s.subscribeToScanEvents);
+
+  useEffect(() => {
+    loadSettings();
+    let unsub: (() => void) | undefined;
+    subscribeToScanEvents().then((fn) => { unsub = fn; });
+    return () => { unsub?.(); };
+  }, []);
+
+  return (
+    <div style={{ padding: 32 }}>
+      <p style={{ color: "#fff", fontFamily: "monospace" }}>Step 4 — Status + Findings + ModeToggle</p>
+      <ModeToggle />
+      <StatusCard />
+      <FindingsList />
+    </div>
+  );
+}
+
+export default App;

@@ -1,6 +1,6 @@
 [package]
 name = "wifi-troubleshooter"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-assisted WiFi network troubleshooter"
 authors = ["Andre Boyer"]
 edition = "2021"
@@ -34,6 +34,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+socket2 = "0.5"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
@@ -43,4 +45,10 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-core-location = "0.3.2"
+objc2-core-wlan = "0.3.2"
+objc2-foundation = "0.3.2"
 
