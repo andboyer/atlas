@@ -30,11 +30,12 @@
 //!     file instead. This is required on Windows where `Start-Process
 //!     -Verb RunAs` cannot pipe stdout back to the parent process.
 
-use std::ffi::CString;
 use std::io::ErrorKind;
 use std::mem::MaybeUninit;
 use std::net::Ipv4Addr;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+use std::ffi::CString;
+#[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
@@ -119,13 +120,11 @@ fn listen_for_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<IgmpProbeRes
     )?;
     // Short per-read timeout so we can stop promptly on `listen_secs`.
     socket.set_read_timeout(Some(Duration::from_millis(500)))?;
-    // Windows raw sockets must be bound to a local address before they
-    // can receive; on macOS this is harmless. INADDR_ANY is fine for
-    // listen-only — we never send.
-    let bind_addr: std::net::SocketAddr =
-        std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0));
-    socket.bind(&bind_addr.into())?;
-    bind_to_interface(&socket, iface)?;
+    // Platform-specific bind + per-interface pinning. On macOS/Linux we
+    // bind to INADDR_ANY and pin via setsockopt; on Windows we MUST bind
+    // to the interface IPv4 address (INADDR_ANY won't deliver multicast
+    // on a raw socket on Windows) and then enable SIO_RCVALL_IGMPMCAST.
+    bind_for_igmp(&socket, iface)?;
 
     let deadline = Instant::now() + Duration::from_secs(listen_secs as u64);
     let mut queriers: Vec<IgmpQuerier> = Vec::new();
@@ -250,8 +249,14 @@ fn parse_ip_igmp(data: &[u8]) -> Option<ParsedIgmp> {
 /// multihomed Mac (e.g. en0 Wi-Fi + en4 USB-Ethernet to a Dante VLAN)
 /// can pick which network to probe.
 #[cfg(target_os = "macos")]
-fn bind_to_interface(sock: &Socket, iface: &str) -> std::io::Result<()> {
+fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
     const IP_BOUND_IF: libc::c_int = 25;
+    // Bind to INADDR_ANY first — raw sockets receive without an explicit
+    // bind on macOS, but we do it for symmetry with other platforms and
+    // to give the kernel a hint that we never want to send.
+    let any: std::net::SocketAddr =
+        std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0));
+    sock.bind(&any.into())?;
     // "0.0.0.0" / "any" / empty → don't pin to a specific interface; let
     // the kernel deliver IGMP from whichever interface receives it.
     if iface.is_empty() || iface == "0.0.0.0" || iface.eq_ignore_ascii_case("any") {
@@ -281,13 +286,95 @@ fn bind_to_interface(sock: &Socket, iface: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn bind_to_interface(_sock: &Socket, _iface: &str) -> std::io::Result<()> {
-    // Windows: per-interface raw-socket binding uses `bind()` against a
-    // local interface IP (not a setsockopt). For v1 we accept any
-    // interface and let the kernel pick \u2014 most consumer/SMB Windows
-    // boxes have only one routable interface anyway. Multihomed support
-    // is a follow-up.
+/// Linux: bind to INADDR_ANY then pin via `SO_BINDTODEVICE` (requires
+/// CAP_NET_RAW already since we're on a raw socket; bind-by-name needs
+/// CAP_NET_RAW or CAP_NET_BIND_SERVICE).
+#[cfg(target_os = "linux")]
+fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
+    let any: std::net::SocketAddr =
+        std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0));
+    sock.bind(&any.into())?;
+    if iface.is_empty() || iface == "0.0.0.0" || iface.eq_ignore_ascii_case("any") {
+        return Ok(());
+    }
+    sock.bind_device(Some(iface.as_bytes()))?;
+    Ok(())
+}
+
+/// Windows: raw IPv4 sockets receive only what's destined to the bound
+/// IP. To see *multicast* IGMP packets that aren't directly addressed
+/// to us we must (a) bind to the iface's IPv4 address (not INADDR_ANY),
+/// and (b) enable `SIO_RCVALL_IGMPMCAST` to subscribe to all
+/// link-local IGMP without joining each group. Requires admin —
+/// `commands.rs` already elevates via `Start-Process -Verb RunAs`.
+#[cfg(target_os = "windows")]
+fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
+    use std::os::raw::c_void;
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{WSAIoctl, SOCKET};
+
+    // SIO_RCVALL_IGMPMCAST — receive all IGMP multicast on the bound
+    // interface. Not in windows-sys' constants table, so we use the raw
+    // IOCTL code from <mstcpip.h>:
+    //   #define SIO_RCVALL_IGMPMCAST _WSAIOW(IOC_VENDOR,2) = 0x98000002
+    const SIO_RCVALL_IGMPMCAST: u32 = 0x9800_0002;
+
+    // Resolve the iface's IPv4 via our enumeration helper. Empty/any
+    // falls back to INADDR_ANY; that won't get us multicast on Windows
+    // but it's still a valid (degenerate) listen — the user will see
+    // "silent" rather than an error.
+    let bind_v4 = if iface.is_empty() || iface == "0.0.0.0" || iface.eq_ignore_ascii_case("any")
+    {
+        std::net::Ipv4Addr::UNSPECIFIED
+    } else {
+        let info = crate::probes::iface::find_by_name(iface).ok_or_else(|| {
+            std::io::Error::new(ErrorKind::NotFound, format!("interface {iface} not found"))
+        })?;
+        info.ipv4
+            .as_deref()
+            .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    ErrorKind::AddrNotAvailable,
+                    format!("interface {iface} has no IPv4 address"),
+                )
+            })?
+    };
+    let bind_addr: std::net::SocketAddr = std::net::SocketAddr::from((bind_v4, 0));
+    sock.bind(&bind_addr.into())?;
+
+    if bind_v4.is_unspecified() {
+        // Nothing more to do — no iface to apply RCVALL to.
+        return Ok(());
+    }
+
+    let s = sock.as_raw_socket() as SOCKET;
+    let on: u32 = 1;
+    let mut bytes_returned: u32 = 0;
+    let ret = unsafe {
+        WSAIoctl(
+            s,
+            SIO_RCVALL_IGMPMCAST,
+            &on as *const _ as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+            None,
+        )
+    };
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn bind_for_igmp(sock: &Socket, _iface: &str) -> std::io::Result<()> {
+    let any: std::net::SocketAddr =
+        std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0));
+    sock.bind(&any.into())?;
     Ok(())
 }
 

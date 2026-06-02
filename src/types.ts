@@ -291,6 +291,13 @@ export interface NetworkInterfaceInfo {
   ipv4: string | null;
   is_up: boolean;
   is_loopback: boolean;
+  /** Heuristic: real physical NIC (Ethernet / Wi-Fi / USB-Ethernet) that
+   *  can carry IPv4 traffic, as opposed to a virtual pseudo-interface
+   *  (utun / awdl / bridge / docker / veth / …). */
+  is_physical: boolean;
+  /** Kernel interface index. Surfaced for completeness; the UI persists
+   *  the `name` only (indices are not stable across reboots on Windows). */
+  index: number | null;
 }
 
 // ─── Wi-Fi system events (Play C) ────────────────────────────────────────

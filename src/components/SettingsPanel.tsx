@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useShallow } from "zustand/react/shallow";
 import { useApp } from "../store";
-import type { NetworkInterfaceInfo, Settings } from "../types";
+import type { Settings } from "../types";
 
 interface Props {
   onClose: () => void;
@@ -51,27 +50,8 @@ export function SettingsPanel({ onClose }: Props) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [keyVisible, setKeyVisible] = useState(false);
-  const [ifaces, setIfaces] = useState<NetworkInterfaceInfo[]>([]);
-  const [ifacesError, setIfacesError] = useState<string | null>(null);
 
   useEffect(() => { setDraft(settings); }, [settings]);
-
-  // Pull the live NIC list once when the panel opens so the AV interface
-  // picker shows real names (en0 / en4 / utun3 / …) instead of a free-form
-  // text input. Loopback + admin-down interfaces are filtered out below.
-  useEffect(() => {
-    let cancelled = false;
-    invoke<NetworkInterfaceInfo[]>("list_network_interfaces")
-      .then((list) => {
-        if (!cancelled) setIfaces(list);
-      })
-      .catch((e) => {
-        if (!cancelled) setIfacesError(String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const update = (patch: Partial<Settings>) =>
     setDraft((d) => ({ ...d, ...patch }));
@@ -260,48 +240,6 @@ export function SettingsPanel({ onClose }: Props) {
             </div>
           </section>
 
-          <section>
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-              AV-over-IP interface
-            </h3>
-            <p className="mb-2 text-xs text-[var(--color-muted)]">
-              Pin Dante / AES67 mDNS browse, control-port reachability, and the
-              privileged IGMP probe to a specific NIC. Use this when the audio
-              VLAN is only reachable through a wired USB-Ethernet adapter —
-              the default (<span className="font-mono">Auto</span>) lets the
-              kernel pick, which usually means Wi-Fi.
-            </p>
-            <select
-              value={draft.preferred_av_interface ?? ""}
-              onChange={(e) => update({ preferred_av_interface: e.target.value })}
-              className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] px-3 py-1.5 text-sm font-mono"
-            >
-              <option value="">Auto (kernel default)</option>
-              {ifaces
-                .filter((i) => !i.is_loopback && i.is_up)
-                .map((i) => (
-                  <option key={i.name} value={i.name}>
-                    {i.name}
-                    {i.ipv4 ? ` — ${i.ipv4}` : " — no IPv4"}
-                  </option>
-                ))}
-              {/* If the saved selection is no longer present (NIC unplugged),
-                  keep it visible so the user knows what was set. */}
-              {draft.preferred_av_interface &&
-                !ifaces.some((i) => i.name === draft.preferred_av_interface) && (
-                  <option value={draft.preferred_av_interface}>
-                    {draft.preferred_av_interface} — not present
-                  </option>
-                )}
-            </select>
-            {ifacesError && (
-              <p className="mt-2 text-xs text-rose-300">
-                Failed to enumerate interfaces: {ifacesError}
-              </p>
-            )}
-          </section>
-
-          {/* LLM */}
           <section>
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               AI explanations (optional)

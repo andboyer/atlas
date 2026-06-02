@@ -58,22 +58,53 @@ fn parse_netsh_interfaces(s: &str) -> LinkStats {
         other => other.to_string(),
     });
 
+    // `Radio type` is netsh's PHY mode column: "802.11ac" / "802.11ax" /
+    // "802.11be" / "802.11n" etc. Normalise to a short suffix ("ac", "ax",
+    // "be", "n") so it matches the macOS collector's convention.
+    let phy_mode = field(s, "Radio type").map(|v| {
+        v.trim()
+            .strip_prefix("802.11")
+            .map(|s| s.to_string())
+            .unwrap_or(v)
+    });
+
+    let wifi_generation = derive_generation(phy_mode.as_deref(), band.as_deref());
+    let vendor = bssid.as_deref().and_then(crate::oui::lookup).map(|s| s.to_string());
+
     LinkStats {
         ssid,
         bssid,
         band,
         channel,
-        channel_width_mhz: None, // not exposed by netsh
+        channel_width_mhz: None, // not exposed by netsh; would need WlanQueryInterface
         rssi_dbm,
         noise_dbm: None,
         snr_db: None,
         tx_rate_mbps: tx_rate,
         rx_rate_mbps: rx_rate,
         security,
-        phy_mode: None,
-        wifi_generation: None,
-        vendor: None,
+        phy_mode,
+        wifi_generation,
+        vendor,
     }
+}
+
+/// Map (PHY mode, band) → marketing Wi-Fi generation. `phy_mode` is the
+/// short suffix from `parse_netsh_interfaces` ("ax", "ac", "be", "n", "g",
+/// "a"); `band` is "2.4" / "5" / "6".
+fn derive_generation(phy_mode: Option<&str>, band: Option<&str>) -> Option<String> {
+    let p = phy_mode?.to_lowercase();
+    let p = p.trim();
+    Some(match (p, band) {
+        ("be", _) => "Wi-Fi 7".into(),
+        ("ax", Some("6")) => "Wi-Fi 6E".into(),
+        ("ax", _) => "Wi-Fi 6".into(),
+        ("ac", _) => "Wi-Fi 5".into(),
+        ("n", _) => "Wi-Fi 4".into(),
+        ("g" | "a", _) => "Wi-Fi 3".into(),
+        ("b", _) => "Wi-Fi 1".into(),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -121,5 +152,33 @@ mod tests {
         let link = parse_netsh_interfaces(SAMPLE);
         assert_ne!(link.ssid.as_deref(), Some("74:ac:b9:aa:bb:cc"));
         assert_ne!(link.bssid.as_deref(), Some("MyNetwork"));
+    }
+
+    #[test]
+    fn derives_wifi5_phy_mode() {
+        let link = parse_netsh_interfaces(SAMPLE);
+        assert_eq!(link.phy_mode.as_deref(), Some("ac"));
+        assert_eq!(link.wifi_generation.as_deref(), Some("Wi-Fi 5"));
+    }
+
+    #[test]
+    fn derive_generation_table() {
+        assert_eq!(
+            derive_generation(Some("ax"), Some("6")).as_deref(),
+            Some("Wi-Fi 6E")
+        );
+        assert_eq!(
+            derive_generation(Some("ax"), Some("5")).as_deref(),
+            Some("Wi-Fi 6")
+        );
+        assert_eq!(
+            derive_generation(Some("be"), Some("6")).as_deref(),
+            Some("Wi-Fi 7")
+        );
+        assert_eq!(
+            derive_generation(Some("n"), Some("2.4")).as_deref(),
+            Some("Wi-Fi 4")
+        );
+        assert_eq!(derive_generation(None, Some("5")), None);
     }
 }

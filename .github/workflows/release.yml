@@ -1,0 +1,105 @@
+name: Release (macOS + Windows installers)
+
+# Builds the Tauri bundles for macOS (Apple Silicon DMG/.app) and Windows
+# (NSIS .exe + MSI), then attaches them to the GitHub Release matching the
+# pushed tag. Manual dispatch is also supported.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Attach artifacts to this existing release (e.g. v0.1.5). Leave blank for artifact-only build."
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macos-arm64
+            rust_target: aarch64-apple-darwin
+            artifact_glob: |
+              src-tauri/target/release/bundle/dmg/*.dmg
+              src-tauri/target/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+          - os: windows-latest
+            label: windows-x64
+            rust_target: x86_64-pc-windows-msvc
+            artifact_glob: |
+              src-tauri/target/release/bundle/nsis/*.exe
+              src-tauri/target/release/bundle/msi/*.msi
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri bundles
+        # macOS  → .app, .dmg (ad-hoc signed; no notarization without secrets)
+        # Windows → NSIS .exe + MSI
+        run: pnpm tauri build
+
+      - name: List produced bundles (debug)
+        shell: bash
+        run: |
+          echo "== bundle tree =="
+          find src-tauri/target/release/bundle -maxdepth 3 -type f \
+            \( -name "*.dmg" -o -name "*.app.tar.gz" -o -name "*.exe" -o -name "*.msi" -o -name "*.sig" \) \
+            -print 2>/dev/null || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Atlas-${{ matrix.label }}-${{ github.sha }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+      # Resolve the release tag — only attach if a tag triggered this run
+      # OR the user supplied `release_tag` on a manual dispatch.
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          tag=""
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${{ github.event.inputs.release_tag }}" ]]; then
+            tag="${{ github.event.inputs.release_tag }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
+      - name: Attach to GitHub Release
+        if: steps.tag.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: ${{ matrix.artifact_glob }}
+          fail_on_unmatched_files: false

@@ -1,17 +1,20 @@
 //! Wi-Fi system event subscriber.
 //!
-//! On macOS, taps `log stream` filtered to wifid/airportd/CoreWLAN to surface
-//! roams, scans, association events, deauths, etc. Each event is classified
-//! and pushed into a small ring buffer + emitted as a `wifi:event` Tauri
-//! event so the frontend can overlay them on the live telemetry chart.
+//! - **macOS** — taps `log stream` filtered to wifid/airportd/CoreWLAN to
+//!   surface roams, scans, association events, deauths, etc.
+//! - **Windows** — polls the
+//!   `Microsoft-Windows-WLAN-AutoConfig/Operational` event log via
+//!   PowerShell `Get-WinEvent`, classifying each event by its numeric
+//!   provider ID (8001 = connect success, 8002 = failure, 8003 =
+//!   disconnect, 11005/11006 = roam start/complete, 8000 = scan
+//!   complete, etc.). One JSON object per line streamed back from a
+//!   long-lived `powershell.exe` process; `RecordId`-based dedupe.
+//! - **Linux** — no shipping producer (no consistent system event
+//!   source); ring stays empty.
 //!
-//! On non-macOS platforms the producer task currently no-ops (returns
-//! immediately); the ring stays empty and the frontend just renders no
-//! markers.
-//!
-//! Why `log stream` and not a private CoreWLAN binding: zero entitlement
-//! requirements, no codesigning headaches, and the same predicate works for
-//! every macOS release since 10.12.
+//! Each event is classified and pushed into a small ring buffer + emitted
+//! as a `wifi:event` Tauri event so the frontend can overlay them on the
+//! live telemetry chart.
 
 use crate::types::WifiEvent;
 use chrono::Utc;
@@ -42,12 +45,15 @@ pub fn start(app: AppHandle) -> WifiEventsHandle {
     let ring: EventRing = Arc::new(RwLock::new(VecDeque::with_capacity(RING_CAPACITY)));
 
     #[cfg(target_os = "macos")]
-    spawn_macos_log_stream(app, Arc::clone(&ring), Arc::clone(&running));
+    spawn_macos_log_stream(app.clone(), Arc::clone(&ring), Arc::clone(&running));
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    spawn_windows_event_log(app.clone(), Arc::clone(&ring), Arc::clone(&running));
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = app;
-        tracing::debug!(target: "wifi_events", "wifi event subscriber is macOS-only (no-op on this platform)");
+        tracing::debug!(target: "wifi_events", "no wifi event producer for this platform; ring stays empty");
     }
 
     WifiEventsHandle { running, ring }
@@ -193,7 +199,6 @@ fn parse_log_line(line: &str) -> Option<WifiEvent> {
     })
 }
 
-#[cfg(target_os = "macos")]
 fn classify(lower: &str) -> &'static str {
     if lower.contains("roam") {
         "roam"
@@ -222,7 +227,6 @@ fn classify(lower: &str) -> &'static str {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn extract_bssid(message: &str) -> Option<String> {
     // 6-octet MAC, colon- or dash-delimited. The macOS log stream contains
     // multi-byte unicode (e.g. `…`), so we MUST iterate by char_indices and
@@ -264,7 +268,6 @@ fn extract_bssid(message: &str) -> Option<String> {
     None
 }
 
-#[cfg(target_os = "macos")]
 fn extract_ssid(message: &str) -> Option<String> {
     // Look for patterns like `SSID=foo`, `SSID "foo"`, or `ssid: foo`.
     let lower = message.to_lowercase();
@@ -284,7 +287,6 @@ fn extract_ssid(message: &str) -> Option<String> {
     None
 }
 
-#[cfg(target_os = "macos")]
 fn extract_rssi(message: &str) -> Option<i32> {
     // Pattern: `RSSI=-67` or `rssi: -67` or `-67 dBm`.
     let lower = message.to_lowercase();
@@ -320,8 +322,212 @@ fn extract_rssi(message: &str) -> Option<i32> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// Windows producer
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+fn spawn_windows_event_log(app: AppHandle, ring: EventRing, running: Arc<AtomicBool>) {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::process::Command;
+
+    // Long-lived PowerShell loop: tail the WLAN-AutoConfig operational log,
+    // emit one JSON object per event, dedupe via RecordId. Sleeps 3s between
+    // polls — Get-WinEvent doesn't support tail/follow, so polling is the
+    // canonical pattern. NoConsole + NonInteractive keeps the window hidden
+    // when launched from the .exe bundle.
+    let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$logName = 'Microsoft-Windows-WLAN-AutoConfig/Operational'
+# Start at the most recent record so we don't re-emit historical noise on app
+# start. RecordId is monotonic per log.
+$last = 0
+try {
+    $seed = Get-WinEvent -LogName $logName -MaxEvents 1 -ErrorAction SilentlyContinue
+    if ($seed) { $last = [int64]$seed.RecordId }
+} catch {}
+while ($true) {
+    try {
+        $events = Get-WinEvent -LogName $logName -MaxEvents 100 -ErrorAction SilentlyContinue |
+                  Where-Object { [int64]$_.RecordId -gt $last } |
+                  Sort-Object RecordId
+        foreach ($e in $events) {
+            $rid = [int64]$e.RecordId
+            if ($rid -gt $last) { $last = $rid }
+            $obj = [ordered]@{
+                Id = $e.Id
+                RecordId = $rid
+                TimeCreated = $e.TimeCreated.ToString('o')
+                ProviderName = $e.ProviderName
+                LevelDisplayName = $e.LevelDisplayName
+                Message = ($e.Message -replace "`r`n", ' ' -replace "`n", ' ')
+            }
+            ($obj | ConvertTo-Json -Compress)
+        }
+    } catch {}
+    Start-Sleep -Seconds 3
+}
+"#;
+
+    tokio::spawn(async move {
+        // Detach the powershell console window from the GUI app (no flashing
+        // black box on startup). 0x08000000 = CREATE_NO_WINDOW.
+        #[cfg(target_os = "windows")]
+        use std::os::windows::process::CommandExt;
+
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x0800_0000);
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(target: "wifi_events", error = %e, "could not spawn PowerShell (Wi-Fi event overlay disabled)");
+                return;
+            }
+        };
+
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                tracing::warn!(target: "wifi_events", "no stdout on PowerShell child");
+                return;
+            }
+        };
+        tracing::info!(target: "wifi_events", "wifi event subscriber started (Windows / Get-WinEvent)");
+
+        let mut lines = BufReader::new(stdout).lines();
+        loop {
+            if !running.load(Ordering::Relaxed) {
+                break;
+            }
+            let line = match lines.next_line().await {
+                Ok(Some(l)) => l,
+                Ok(None) => {
+                    tracing::debug!(target: "wifi_events", "PowerShell stream closed; exiting");
+                    break;
+                }
+                Err(e) => {
+                    tracing::debug!(target: "wifi_events", error = %e, "PowerShell read failed; exiting");
+                    break;
+                }
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() || !trimmed.starts_with('{') {
+                continue;
+            }
+            let event = match parse_windows_event_line(trimmed) {
+                Some(e) => e,
+                None => continue,
+            };
+            {
+                let mut r = ring.write();
+                if r.len() == RING_CAPACITY {
+                    r.pop_front();
+                }
+                r.push_back(event.clone());
+            }
+            if let Err(e) = app.emit("wifi:event", &event) {
+                tracing::debug!(target: "wifi_events", error = %e, "emit wifi:event failed");
+            }
+        }
+
+        let _ = child.kill().await;
+        tracing::info!(target: "wifi_events", "wifi event subscriber stopped (Windows)");
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_event_line(line: &str) -> Option<WifiEvent> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let id = v.get("Id").and_then(|x| x.as_i64()).unwrap_or(0);
+    let message = v
+        .get("Message")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let provider = v
+        .get("ProviderName")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let kind = classify_windows_event_id(id).unwrap_or_else(|| {
+        let lower = message.to_lowercase();
+        let k = classify(&lower);
+        if k == "ignore" {
+            "other"
+        } else {
+            k
+        }
+    });
+
+    // Drop totally empty messages from unclassified IDs.
+    if message.is_empty() && kind == "other" {
+        return None;
+    }
+
+    let bssid = if message.is_empty() {
+        None
+    } else {
+        extract_bssid(&message)
+    };
+    let ssid = if message.is_empty() {
+        None
+    } else {
+        extract_ssid(&message)
+    };
+    let rssi_dbm = if message.is_empty() {
+        None
+    } else {
+        extract_rssi(&message)
+    };
+
+    Some(WifiEvent {
+        id: Uuid::new_v4().to_string(),
+        ts: Utc::now(),
+        kind: kind.to_string(),
+        subsystem: provider,
+        process: Some("svchost.exe (WlanSvc)".to_string()),
+        message,
+        bssid,
+        ssid,
+        rssi_dbm,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn classify_windows_event_id(id: i64) -> Option<&'static str> {
+    // Reference: Microsoft-Windows-WLAN-AutoConfig provider event IDs.
+    // Values cross-referenced against Microsoft docs + real-world logs;
+    // unknown IDs fall through to message-based classification.
+    match id {
+        8000 | 8001 | 8002 => Some("assoc"),       // connection start / success / failure
+        8003 | 8004 => Some("disassoc"),           // disconnect / disconnect-reason
+        11000..=11010 => Some("roam"),             // roaming start/complete/failure
+        12010..=12013 => Some("auth"),             // 802.1X / EAP
+        20010..=20020 => Some("auth"),             // wireless security
+        4100..=4109 => Some("kernel"),             // native WiFi driver
+        6100..=6109 => Some("scan"),               // scan complete/empty
+        10000..=10003 => Some("power"),            // radio state change
+        _ => None,
+    }
+}
+
 #[cfg(test)]
-#[cfg(target_os = "macos")]
 mod tests {
     use super::*;
 

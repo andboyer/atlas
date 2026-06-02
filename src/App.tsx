@@ -22,6 +22,7 @@ import { HistoryPanel } from "./components/HistoryPanel";
 import { IncidentTimeline } from "./components/IncidentTimeline";
 import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { AvInterfacePicker } from "./components/AvInterfacePicker";
 import ChannelMap from "./components/ChannelMap";
 import { NearbyApTable } from "./components/NearbyApTable";
 import ChatPanel from "./components/ChatPanel";
@@ -239,6 +240,7 @@ function App() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            <AvInterfacePicker />
             {lastScan && (
               <button
                 onClick={handleExport}

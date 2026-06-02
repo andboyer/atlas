@@ -14,7 +14,11 @@
 //! fall back to scraping the human-readable lines if `-c` is missing on
 //! older macOS versions.
 //!
-//! Linux / Windows: no equivalent shipped tool — this probe returns `None`.
+//! Linux / Windows: we synthesise the same three numbers from Cloudflare's
+//! free speed-test endpoints (`speed.cloudflare.com/__down|__up`). The
+//! responsiveness math mirrors what `networkQuality` does: sample HTTP
+//! round-trip latency every 200 ms while the link is saturated, then
+//! RPM = 60_000 / mean(latency_ms). Same units, same scale, same labels.
 
 use crate::types::QualityStats;
 use serde::Deserialize;
@@ -65,7 +69,9 @@ pub async fn measure_quality_verbose() -> Result<QualityStats, String> {
 
 #[cfg(not(target_os = "macos"))]
 pub async fn measure_quality_verbose() -> Result<QualityStats, String> {
-    Err("Bufferbloat measurement requires macOS 12 or later.".to_string())
+    measure_cloudflare()
+        .await
+        .ok_or_else(|| "Cloudflare speed test failed (network down or blocked).".to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -98,7 +104,7 @@ async fn measure_platform() -> Option<QualityStats> {
 
 #[cfg(not(target_os = "macos"))]
 async fn measure_platform() -> Option<QualityStats> {
-    None
+    measure_cloudflare().await
 }
 
 // ── JSON parsing ─────────────────────────────────────────────────────────────
@@ -266,6 +272,197 @@ fn rpm_label(rpm: u32) -> String {
 
 /// Threshold below which the network is considered bufferbloated.
 pub const BUFFERBLOAT_RPM_THRESHOLD: u32 = 200;
+
+// ── Cloudflare fallback (Linux + Windows) ───────────────────────────────────
+//
+// Uses the public `speed.cloudflare.com` endpoints used by Cloudflare's own
+// in-browser speed test:
+//   • `GET  /__down?bytes=N` returns N zero-bytes (download)
+//   • `POST /__up`           accepts any body (upload)
+//
+// The shape we want matches Apple's responsiveness-under-working-conditions
+// methodology: saturate the link in one direction, then poll a small HTTP
+// transaction at ~5 Hz and compute RPM = 60_000 / mean(probe_ms). We don't
+// need to be byte-for-byte identical to networkQuality; we need to give the
+// user a comparable number with the same threshold (`BUFFERBLOAT_RPM_THRESHOLD`).
+#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
+async fn measure_cloudflare() -> Option<QualityStats> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tokio::time::sleep;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .ok()?;
+
+    // 1) Idle latency baseline — 5 small GETs back-to-back, take the min.
+    let idle_ms = {
+        let mut samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let t0 = Instant::now();
+            let ok = client
+                .get("https://speed.cloudflare.com/__down?bytes=0")
+                .send()
+                .await
+                .is_ok();
+            if ok {
+                samples.push(t0.elapsed().as_secs_f32() * 1000.0);
+            }
+        }
+        if samples.is_empty() {
+            tracing::debug!(target: "scan", "cloudflare reachability check failed");
+            return None;
+        }
+        samples.into_iter().fold(f32::INFINITY, f32::min)
+    };
+
+    // Helper: spawn N parallel workers, count bytes for `dur` seconds.
+    async fn run_phase<F, Fut>(
+        n: usize,
+        dur: Duration,
+        probe_client: reqwest::Client,
+        worker: F,
+    ) -> (u64, Vec<f32>)
+    where
+        F: Fn() -> Fut + Send + Sync + 'static + Clone,
+        Fut: std::future::Future<Output = u64> + Send + 'static,
+    {
+        let total = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let mut handles = Vec::with_capacity(n);
+        for _ in 0..n {
+            let total_c = Arc::clone(&total);
+            let stop_c = Arc::clone(&stop);
+            let w = worker.clone();
+            handles.push(tokio::spawn(async move {
+                while !stop_c.load(Ordering::Relaxed) {
+                    let bytes = w().await;
+                    total_c.fetch_add(bytes, Ordering::Relaxed);
+                }
+            }));
+        }
+
+        // Probe loop: sample HTTP round-trip latency under load.
+        let probe_handle = {
+            let stop_c = Arc::clone(&stop);
+            tokio::spawn(async move {
+                let mut samples = Vec::new();
+                while !stop_c.load(Ordering::Relaxed) {
+                    let t0 = Instant::now();
+                    if probe_client
+                        .get("https://speed.cloudflare.com/__down?bytes=0")
+                        .send()
+                        .await
+                        .is_ok()
+                    {
+                        samples.push(t0.elapsed().as_secs_f32() * 1000.0);
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+                samples
+            })
+        };
+
+        sleep(dur).await;
+        stop.store(true, Ordering::Relaxed);
+        for h in handles {
+            let _ = h.await;
+        }
+        let samples = probe_handle.await.unwrap_or_default();
+        (total.load(Ordering::Relaxed), samples)
+    }
+
+    // 2) Download phase — 4 parallel streams for 8 s.
+    let dl_client = client.clone();
+    let dl_worker = move || {
+        let c = dl_client.clone();
+        async move {
+            let resp = match c
+                .get("https://speed.cloudflare.com/__down?bytes=104857600") // 100 MB
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return 0u64,
+            };
+            // Drain in chunks so we can be cancelled promptly between chunks.
+            let mut stream = resp;
+            let mut total: u64 = 0;
+            while let Ok(Some(chunk)) = stream.chunk().await {
+                total = total.saturating_add(chunk.len() as u64);
+            }
+            total
+        }
+    };
+    let (dl_bytes, dl_probes) = run_phase(
+        4,
+        Duration::from_secs(8),
+        client.clone(),
+        dl_worker,
+    )
+    .await;
+
+    // 3) Upload phase — 4 parallel streams for 8 s.
+    let ul_client = client.clone();
+    let ul_worker = move || {
+        let c = ul_client.clone();
+        async move {
+            // 8 MB body — large enough to amortise per-request overhead.
+            let body = vec![0u8; 8 * 1024 * 1024];
+            let len = body.len() as u64;
+            match c
+                .post("https://speed.cloudflare.com/__up")
+                .body(body)
+                .send()
+                .await
+            {
+                Ok(_) => len,
+                Err(_) => 0,
+            }
+        }
+    };
+    let (ul_bytes, ul_probes) =
+        run_phase(4, Duration::from_secs(8), client.clone(), ul_worker).await;
+
+    // 4) Throughput. Use the actual phase duration (8 s) — bytes/8 s in Mbps.
+    let dl_mbps = ((dl_bytes as f64 * 8.0) / 8.0 / 1_000_000.0) as f32;
+    let ul_mbps = ((ul_bytes as f64 * 8.0) / 8.0 / 1_000_000.0) as f32;
+
+    // 5) Responsiveness — concatenate dl + ul probe samples and take the
+    // mean. RPM = 60_000 / mean_ms. We need a few samples to be meaningful;
+    // fall back to None rather than report a noisy 1-sample number.
+    let mut all_probes = dl_probes;
+    all_probes.extend(ul_probes);
+    let rpm = if all_probes.len() >= 4 {
+        let sum: f32 = all_probes.iter().sum();
+        let mean = sum / all_probes.len() as f32;
+        if mean > 0.5 {
+            Some((60_000.0 / mean).round() as u32)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if dl_bytes == 0 && ul_bytes == 0 {
+        tracing::debug!(target: "scan", "cloudflare speedtest produced no bytes");
+        return None;
+    }
+
+    Some(QualityStats {
+        dl_throughput_mbps: if dl_mbps > 0.0 { Some(dl_mbps) } else { None },
+        ul_throughput_mbps: if ul_mbps > 0.0 { Some(ul_mbps) } else { None },
+        responsiveness_rpm: rpm,
+        idle_latency_ms: Some(idle_ms),
+        responsiveness_label: rpm.map(rpm_label),
+    })
+}
 
 #[cfg(test)]
 mod tests {

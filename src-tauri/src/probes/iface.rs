@@ -11,10 +11,10 @@
 //!     every packet on that socket through the chosen interface index
 //!     regardless of the routing table.
 //!   - **Linux** — `SO_BINDTODEVICE` via socket2's `bind_device()`.
-//!   - **Other (Windows / unknown)** — best-effort source-IP bind: we
-//!     `bind()` the socket to the interface's IPv4 address and let the
-//!     routing table do its job. Works for the common case of distinct
-//!     subnets per NIC.
+//!   - **Windows** — `setsockopt(IP_UNICAST_IF)` with the interface
+//!     index in network byte order (per WinSock docs). The kernel then
+//!     routes the socket's traffic through that NIC regardless of the
+//!     routing table — exact semantic match for macOS's IP_BOUND_IF.
 
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -23,6 +23,8 @@ use std::ffi::CString;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawSocket;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +44,19 @@ pub struct NetworkInterfaceInfo {
     pub is_up: bool,
     /// Loopback (`lo0` / `lo`). The picker should filter these out.
     pub is_loopback: bool,
+    /// Heuristic: this is a real physical NIC (Ethernet / Wi-Fi / USB-
+    /// Ethernet) that can carry IPv4 traffic, as opposed to a virtual
+    /// pseudo-interface (utun / awdl / bridge / docker / veth / …).
+    /// Computed from the kernel name; the picker uses it to hide the
+    /// dozen-or-so virtual interfaces macOS / Linux create by default.
+    pub is_physical: bool,
+    /// Kernel interface index (1-based on every supported OS). Required
+    /// for `IP_UNICAST_IF` on Windows and `IP_BOUND_IF` on macOS; we
+    /// stash it on the row so callers don't have to do a second lookup.
+    /// `None` when the index wasn't resolvable (very rare; means the
+    /// adapter just disappeared between enumeration and the read).
+    #[serde(default)]
+    pub index: Option<u32>,
 }
 
 /// Enumerate every interface the kernel knows about, with one row per
@@ -55,10 +70,12 @@ pub fn list_interfaces() -> Vec<NetworkInterfaceInfo> {
     {
         list_unix()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // Windows path can be added later via GetAdaptersAddresses; for
-        // now the UI simply gets an empty list and falls back to "Auto".
+        list_windows().unwrap_or_default()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
         Vec::new()
     }
 }
@@ -79,6 +96,7 @@ fn list_unix() -> Vec<NetworkInterfaceInfo> {
                 let flags = ifa.ifa_flags as i32;
                 let is_up = (flags & libc::IFF_UP as i32) != 0;
                 let is_loopback = (flags & libc::IFF_LOOPBACK as i32) != 0;
+                let is_physical = is_physical_name(&name);
                 let entry = by_name
                     .entry(name.clone())
                     .or_insert_with(|| NetworkInterfaceInfo {
@@ -86,9 +104,19 @@ fn list_unix() -> Vec<NetworkInterfaceInfo> {
                         ipv4: None,
                         is_up,
                         is_loopback,
+                        is_physical,
+                        index: None,
                     });
                 entry.is_up = entry.is_up || is_up;
                 entry.is_loopback = entry.is_loopback || is_loopback;
+                if entry.index.is_none() {
+                    if let Ok(cname) = CString::new(name.as_str()) {
+                        let idx = libc::if_nametoindex(cname.as_ptr());
+                        if idx != 0 {
+                            entry.index = Some(idx);
+                        }
+                    }
+                }
                 if entry.ipv4.is_none() && !ifa.ifa_addr.is_null() {
                     let sa = &*ifa.ifa_addr;
                     if sa.sa_family as i32 == libc::AF_INET {
@@ -111,6 +139,180 @@ fn list_unix() -> Vec<NetworkInterfaceInfo> {
     // Stable order: en0 / en1 / ..., then alphabetical.
     v.sort_by(|a, b| a.name.cmp(&b.name));
     v
+}
+
+/// Windows NIC enumeration via `GetAdaptersAddresses`. Returns one row
+/// per adapter, populated with the friendly name (e.g. "Ethernet 3"),
+/// first IPv4 unicast address, oper-status, and adapter index.
+///
+/// We treat `IF_TYPE_ETHERNET_CSMACD` (6) and `IF_TYPE_IEEE80211` (71)
+/// as physical for the AV picker; everything else (tunnels, loopback,
+/// software bridges) is flagged virtual.
+#[cfg(windows)]
+fn list_windows() -> Option<Vec<NetworkInterfaceInfo>> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetAdaptersAddresses, GAA_FLAG_INCLUDE_PREFIX, GAA_FLAG_SKIP_ANYCAST,
+        GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IF_TYPE_ETHERNET_CSMACD,
+        IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK, IP_ADAPTER_ADDRESSES_LH,
+        IP_ADAPTER_UNICAST_ADDRESS_LH,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_UNSPEC, SOCKADDR_IN};
+
+    const IF_OPER_STATUS_UP: u32 = 1;
+    // GetAdaptersAddresses needs a buffer; first call with size=0 returns
+    // the required size in `size`. 15 KB is enough for ~30 adapters; we
+    // grow up to 256 KB just in case.
+    let mut size: u32 = 15 * 1024;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut adapters: *mut IP_ADAPTER_ADDRESSES_LH = std::ptr::null_mut();
+    let flags = GAA_FLAG_INCLUDE_PREFIX
+        | GAA_FLAG_SKIP_ANYCAST
+        | GAA_FLAG_SKIP_MULTICAST
+        | GAA_FLAG_SKIP_DNS_SERVER;
+    for _ in 0..4 {
+        buf.resize(size as usize, 0);
+        adapters = buf.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH;
+        let ret = unsafe {
+            GetAdaptersAddresses(
+                AF_UNSPEC as u32,
+                flags,
+                std::ptr::null_mut(),
+                adapters,
+                &mut size,
+            )
+        };
+        const ERROR_SUCCESS: u32 = 0;
+        const ERROR_BUFFER_OVERFLOW: u32 = 111;
+        if ret == ERROR_SUCCESS {
+            break;
+        }
+        if ret == ERROR_BUFFER_OVERFLOW {
+            // `size` was updated to the required value; retry.
+            continue;
+        }
+        // Any other error: empty Vec (caller treats this the same as no
+        // physical NICs being available).
+        return None;
+    }
+
+    let mut out: Vec<NetworkInterfaceInfo> = Vec::new();
+    let mut cur = adapters;
+    while !cur.is_null() {
+        let adapter = unsafe { &*cur };
+        let name = read_wide(adapter.FriendlyName);
+        // `AdapterName` is the GUID; not user-facing. Keep FriendlyName as
+        // the stable identifier the UI persists in settings — same as
+        // PowerShell's `Get-NetAdapter -Name`.
+        let if_type = adapter.IfType;
+        let if_index = unsafe { adapter.Anonymous1.Anonymous.IfIndex };
+        let oper_status = adapter.OperStatus as u32;
+        let is_up = oper_status == IF_OPER_STATUS_UP;
+        let is_loopback = if_type == IF_TYPE_SOFTWARE_LOOPBACK;
+        let is_physical = matches!(if_type, IF_TYPE_ETHERNET_CSMACD | IF_TYPE_IEEE80211);
+
+        // Walk the unicast-address list for the first IPv4.
+        let mut ipv4: Option<String> = None;
+        let mut ua: *mut IP_ADAPTER_UNICAST_ADDRESS_LH = adapter.FirstUnicastAddress;
+        while !ua.is_null() {
+            let entry = unsafe { &*ua };
+            let sa = entry.Address.lpSockaddr;
+            if !sa.is_null() && unsafe { (*sa).sa_family } == windows_sys::Win32::Networking::WinSock::AF_INET {
+                let sin = sa as *const SOCKADDR_IN;
+                let raw = unsafe { (*sin).sin_addr.S_un.S_addr };
+                let octets = raw.to_ne_bytes();
+                let ip = Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]);
+                ipv4 = Some(ip.to_string());
+                break;
+            }
+            ua = entry.Next;
+        }
+
+        if !name.is_empty() {
+            out.push(NetworkInterfaceInfo {
+                name,
+                ipv4,
+                is_up,
+                is_loopback,
+                is_physical,
+                index: Some(if_index),
+            });
+        }
+        cur = adapter.Next;
+    }
+    // Stable, predictable order for the picker dropdown.
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Some(out)
+}
+
+/// Decode a NUL-terminated wide string from a Win32 struct.
+#[cfg(windows)]
+fn read_wide(ptr: *const u16) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let mut len = 0usize;
+        while *ptr.add(len) != 0 {
+            len += 1;
+            // Defensive: friendly names are <= 256 chars per WinSock docs.
+            if len > 1024 {
+                break;
+            }
+        }
+        let slice = std::slice::from_raw_parts(ptr, len);
+        String::from_utf16_lossy(slice)
+    }
+}
+
+/// Heuristic for "this kernel name belongs to a real physical NIC that
+/// can carry IPv4 traffic". Blacklist-based because macOS / Linux both
+/// invent new virtual-interface prefixes (`anpi*`, `llw*`, `vmenet*`,
+/// `cilium_*`, …) faster than we can whitelist real ones. Anything not
+/// matching a known virtual prefix is treated as physical.
+///
+/// Windows doesn't use this — `GetAdaptersAddresses` exposes
+/// `IfType` directly, which is a much more reliable signal than the
+/// Win32 friendly name.
+///
+/// Known virtual prefixes:
+///   - macOS: `lo`, `utun`, `awdl`, `llw`, `anpi`, `gif`, `stf`,
+///     `bridge`, `ap` (AirDrop / softAP), `pktap`, `vmenet`, `XHC`,
+///     `pdp_ip` (cellular tether), `feth`.
+///   - Linux: `lo`, `docker`, `br-`, `virbr`, `veth`, `tun`, `tap`,
+///     `vnet`, `vmnet`, `kube`, `cni`, `flannel`, `cali`, `weave`,
+///     `cilium`, `wg` (WireGuard).
+#[cfg(unix)]
+fn is_physical_name(name: &str) -> bool {
+    const VIRTUAL_PREFIXES: &[&str] = &[
+        // macOS
+        "lo", "utun", "awdl", "llw", "anpi", "gif", "stf", "bridge", "ap", "pktap",
+        "vmenet", "XHC", "pdp_ip", "feth",
+        // Linux
+        "docker", "br-", "virbr", "veth", "tun", "tap", "vnet", "vmnet", "kube", "cni",
+        "flannel", "cali", "weave", "cilium", "wg",
+    ];
+    // Match on prefix-then-digit-or-delimiter (or exact match) so we
+    // don't catch unrelated names that just happen to share a leading
+    // substring (e.g. `enp3s0` is a real Linux NIC and must NOT match a
+    // hypothetical `en` virtual prefix). Prefixes that already end in a
+    // delimiter (`br-`) accept any remainder.
+    for &pfx in VIRTUAL_PREFIXES {
+        let Some(rest) = name.strip_prefix(pfx) else { continue };
+        if rest.is_empty() {
+            return false;
+        }
+        if pfx.ends_with('-') || pfx.ends_with('_') {
+            return false;
+        }
+        if rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '-' || c == '_')
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Look up an interface row by name. Returns `None` if the name doesn't
@@ -225,7 +427,64 @@ fn bind_socket_to_iface(sock: &Socket, _addr: IpAddr, iface: &str) -> std::io::R
     sock.bind_device(Some(iface.as_bytes()))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+fn bind_socket_to_iface(sock: &Socket, addr: IpAddr, iface: &str) -> std::io::Result<()> {
+    // WinSock `IP_UNICAST_IF` (RFC 3493 §5.2 equivalent, MS-only spelling).
+    // Documented at:
+    //   https://learn.microsoft.com/en-us/windows/win32/winsock/ipproto-ip-socket-options
+    //
+    // Quirk: the v4 form takes the interface index in **network byte
+    // order**; the v6 form takes it in host byte order. We only do v4
+    // here, so byte-swap once.
+    use std::os::raw::c_void;
+    use windows_sys::Win32::Networking::WinSock::{
+        setsockopt, IPPROTO_IP, IPPROTO_IPV6, IPV6_UNICAST_IF, IP_UNICAST_IF, SOCKET,
+    };
+
+    let info = find_by_name(iface).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("interface {iface} not found"),
+        )
+    })?;
+    let idx = info.index.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("interface {iface} has no kernel index"),
+        )
+    })?;
+    let sock_handle = sock.as_raw_socket() as SOCKET;
+    let (level, name, value_be): (i32, i32, u32) = match addr {
+        IpAddr::V4(_) => (IPPROTO_IP as i32, IP_UNICAST_IF as i32, idx.to_be()),
+        IpAddr::V6(_) => (IPPROTO_IPV6 as i32, IPV6_UNICAST_IF as i32, idx),
+    };
+    let ret = unsafe {
+        setsockopt(
+            sock_handle,
+            level,
+            name,
+            &value_be as *const u32 as *const u8 as *const _,
+            std::mem::size_of::<u32>() as i32,
+        )
+    };
+    // setsockopt returns 0 on success, SOCKET_ERROR (-1) on failure.
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Belt-and-braces: also source-bind to the iface's IPv4 so unicast
+    // routes are unambiguous. IP_UNICAST_IF alone is sufficient on
+    // modern Windows (≥10), but adding the source bind is harmless and
+    // gives sensible behavior on the rare older box.
+    if let (IpAddr::V4(_), Some(v4)) = (
+        addr,
+        info.ipv4.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok()),
+    ) {
+        let _ = sock.bind(&SocketAddr::new(IpAddr::V4(v4), 0).into());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn bind_socket_to_iface(sock: &Socket, addr: IpAddr, iface: &str) -> std::io::Result<()> {
     // Best-effort: bind the connection's source IP to the interface's
     // first matching address. The routing table then picks the iface
@@ -275,5 +534,44 @@ mod tests {
         assert!(find_by_name("definitely-not-a-real-iface-zzz").is_none());
         assert!(find_by_name("   ").is_none());
         assert!(find_by_name("").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn physical_name_classifier_macos() {
+        // Real macOS NICs (Ethernet / Wi-Fi / USB-Ethernet / Thunderbolt).
+        assert!(is_physical_name("en0"));
+        assert!(is_physical_name("en4"));
+        assert!(is_physical_name("en10"));
+        // macOS virtual.
+        assert!(!is_physical_name("lo0"));
+        assert!(!is_physical_name("utun0"));
+        assert!(!is_physical_name("utun15"));
+        assert!(!is_physical_name("awdl0"));
+        assert!(!is_physical_name("llw0"));
+        assert!(!is_physical_name("anpi0"));
+        assert!(!is_physical_name("bridge0"));
+        assert!(!is_physical_name("ap1"));
+        assert!(!is_physical_name("gif0"));
+        assert!(!is_physical_name("stf0"));
+        assert!(!is_physical_name("pdp_ip0"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn physical_name_classifier_linux() {
+        // Real Linux NICs.
+        assert!(is_physical_name("eth0"));
+        assert!(is_physical_name("enp3s0"));
+        assert!(is_physical_name("wlp2s0"));
+        assert!(is_physical_name("eno1"));
+        // Linux virtual.
+        assert!(!is_physical_name("lo"));
+        assert!(!is_physical_name("docker0"));
+        assert!(!is_physical_name("br-1234567890ab"));
+        assert!(!is_physical_name("virbr0"));
+        assert!(!is_physical_name("veth1234abc"));
+        assert!(!is_physical_name("tun0"));
+        assert!(!is_physical_name("wg0"));
     }
 }
