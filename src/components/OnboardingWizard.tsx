@@ -188,10 +188,10 @@ function StepWelcome() {
         </div>
       </div>
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-3">
-        Welcome to WiFi Troubleshooter
+        Welcome to Atlas
       </h1>
       <p className="text-gray-500 dark:text-gray-400 text-sm leading-relaxed mb-6">
-        This app continuously monitors your WiFi and LAN, detects issues before they
+        Atlas continuously charts your Wi-Fi and LAN, detects issues before they
         become outages, and explains fixes in plain language.
       </p>
       <div className="grid grid-cols-3 gap-3 text-left">

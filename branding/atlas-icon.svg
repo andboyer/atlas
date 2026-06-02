@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0%" stop-color="#1E5BBF"/>
+      <stop offset="55%" stop-color="#143869"/>
+      <stop offset="100%" stop-color="#0B1F3A"/>
+    </radialGradient>
+    <linearGradient id="needle-n" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F4D896"/>
+      <stop offset="55%" stop-color="#D4A24C"/>
+      <stop offset="100%" stop-color="#8C6420"/>
+    </linearGradient>
+    <linearGradient id="needle-s" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E2E8F0"/>
+      <stop offset="100%" stop-color="#94A3B8"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7FE3F0"/>
+      <stop offset="100%" stop-color="#3FB8C9"/>
+    </linearGradient>
+    <radialGradient id="ring-fade" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="70%" stop-color="#FFFFFF" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bg)"/>
+  <g fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="2">
+    <circle cx="512" cy="512" r="380"/>
+    <circle cx="512" cy="512" r="300"/>
+    <circle cx="512" cy="512" r="220"/>
+  </g>
+  <circle cx="512" cy="512" r="380" fill="none" stroke="#D4A24C" stroke-opacity="0.55" stroke-width="4"/>
+  <g stroke="#D4A24C" stroke-opacity="0.7" stroke-width="3" stroke-linecap="round">
+    <line x1="512" y1="116" x2="512" y2="148"/>
+    <line x1="512" y1="876" x2="512" y2="908"/>
+    <line x1="116" y1="512" x2="148" y2="512"/>
+    <line x1="876" y1="512" x2="908" y2="512"/>
+  </g>
+  <g stroke="#D4A24C" stroke-opacity="0.35" stroke-width="2" stroke-linecap="round">
+    <line x1="232" y1="232" x2="258" y2="258"/>
+    <line x1="792" y1="232" x2="766" y2="258"/>
+    <line x1="232" y1="792" x2="258" y2="766"/>
+    <line x1="792" y1="792" x2="766" y2="766"/>
+  </g>
+  <circle cx="512" cy="512" r="280" fill="url(#ring-fade)"/>
+  <polygon points="512,512 472,672 512,872 552,672" fill="url(#needle-s)" opacity="0.85"/>
+  <polygon points="512,512 552,672 512,872" fill="#475569" opacity="0.55"/>
+  <polygon points="512,512 672,472 872,512 672,552" fill="#CBD5E1" opacity="0.85"/>
+  <polygon points="512,512 672,552 872,512" fill="#475569" opacity="0.45"/>
+  <polygon points="512,512 352,472 152,512 352,552" fill="#CBD5E1" opacity="0.85"/>
+  <polygon points="512,512 352,472 152,512" fill="#475569" opacity="0.45"/>
+  <polygon points="512,512 460,330 512,150 564,330" fill="url(#needle-n)"/>
+  <polygon points="512,512 564,330 512,150" fill="#8C6420" opacity="0.6"/>
+  <g fill="none" stroke="url(#arc)" stroke-linecap="round">
+    <path d="M 430 280 Q 512 220 594 280" stroke-width="22" opacity="0.95"/>
+    <path d="M 388 220 Q 512 130 636 220" stroke-width="18" opacity="0.7"/>
+    <path d="M 350 165 Q 512 50  674 165" stroke-width="14" opacity="0.45"/>
+  </g>
+  <circle cx="512" cy="512" r="44" fill="#0B1F3A" stroke="#D4A24C" stroke-width="6"/>
+  <circle cx="512" cy="512" r="14" fill="#D4A24C"/>
+</svg>

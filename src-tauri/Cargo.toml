@@ -1,7 +1,7 @@
 [package]
 name = "wifi-troubleshooter"
-version = "0.1.2"
-description = "AI-assisted WiFi network troubleshooter"
+version = "0.1.3"
+description = "Atlas — AI-assisted Wi-Fi & LAN diagnostics"
 authors = ["Andre Boyer"]
 edition = "2021"
 

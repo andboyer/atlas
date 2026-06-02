@@ -1,7 +1,9 @@
-# WiFi Troubleshooter
+# Atlas
+
+> **Atlas — map your network.**
 
 A cross-platform desktop app that uses a hybrid AI approach (deterministic
-rule engine + optional LLM explanations) to detect complex WiFi network
+rule engine + optional LLM explanations) to detect complex Wi-Fi network
 issues — including **IoT device dropouts** and **POS terminal random
 disconnects** (Clover, Square, Toast, etc.) — and recommend concrete fixes.
 

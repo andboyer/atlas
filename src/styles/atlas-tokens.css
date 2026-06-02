@@ -1,0 +1,31 @@
+/*
+ * Atlas — design tokens
+ *
+ * Brand palette, semantic verdict colours, and type stacks.
+ * Import once from src/main.tsx (or src/index.css) and reference via
+ * `var(--atlas-*)` throughout the UI.
+ */
+:root {
+  /* Brand */
+  --atlas-navy:      #0B1F3A;
+  --atlas-blue:      #1E5BBF;
+  --atlas-meridian:  #3FB8C9;
+  --atlas-brass:     #D4A24C;
+  --atlas-parchment: #F5EFE0;
+  --atlas-ink:       #0F172A;
+  --atlas-slate:     #475569;
+  --atlas-mist:      #E2E8F0;
+
+  /* Semantic */
+  --atlas-healthy:   #10B981;
+  --atlas-warn:      #F59E0B;
+  --atlas-critical:  #EF4444;
+  --atlas-info:      #3FB8C9;
+
+  /* Hero gradient (splash, onboarding, marketing) */
+  --atlas-hero: linear-gradient(160deg, #0B1F3A 0%, #1E3A6A 50%, #1E5BBF 100%);
+
+  /* Type */
+  --atlas-font-ui:   "Inter", "Helvetica Neue", system-ui, sans-serif;
+  --atlas-font-mono: "JetBrains Mono", "Geist Mono", ui-monospace, monospace;
+}

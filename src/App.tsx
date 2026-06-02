@@ -219,11 +219,11 @@ function App() {
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-[var(--color-accent)] to-indigo-500" />
             <div>
-              <h1 className="text-sm font-semibold leading-tight">
-                WiFi Troubleshooter
+              <h1 className="text-sm font-semibold leading-tight tracking-[0.2em]">
+                ATLAS
               </h1>
               <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)]">
-                AI-assisted diagnostics
+                Map your network
               </p>
             </div>
             {monitoring && (
