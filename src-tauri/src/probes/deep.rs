@@ -113,7 +113,9 @@ fn listen_for_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<IgmpProbeRes
     let socket = Socket::new(
         Domain::IPV4,
         Type::RAW,
-        Some(Protocol::from(libc::IPPROTO_IGMP)),
+        // IGMP IANA protocol number is 2 (RFC 3232 / IANA assignment).
+        // Using a literal avoids libc::IPPROTO_IGMP, which is not defined on Windows.
+        Some(Protocol::from(2)),
     )?;
     // Short per-read timeout so we can stop promptly on `listen_secs`.
     socket.set_read_timeout(Some(Duration::from_millis(500)))?;
