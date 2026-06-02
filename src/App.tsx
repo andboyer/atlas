@@ -217,12 +217,17 @@ function App() {
       <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-bg)]/85 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-6 py-3">
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-[var(--color-accent)] to-indigo-500" />
+            <img
+              src="/atlas-mark.svg"
+              alt=""
+              className="h-9 w-9 select-none"
+              draggable={false}
+            />
             <div>
-              <h1 className="text-sm font-semibold leading-tight tracking-[0.2em]">
+              <h1 className="text-sm font-semibold leading-tight tracking-[0.28em] text-[var(--color-accent)]">
                 ATLAS
               </h1>
-              <p className="text-[10px] uppercase tracking-wider text-[var(--color-muted)]">
+              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)]">
                 Map your network
               </p>
             </div>

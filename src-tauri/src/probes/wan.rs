@@ -28,7 +28,7 @@ struct IpApiResponse {
 pub async fn probe_wan() -> Option<WanInfo> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
-        .user_agent("wifi-troubleshooter/0.1")
+        .user_agent("atlas/0.1")
         .build()
         .ok()?;
 

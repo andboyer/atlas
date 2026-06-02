@@ -12,7 +12,6 @@
 import { useState } from "react";
 import { useApp } from "../store";
 import {
-  Wifi,
   Building2,
   ShoppingCart,
   Home,
@@ -183,8 +182,13 @@ function StepWelcome() {
   return (
     <div className="text-center">
       <div className="flex justify-center mb-5">
-        <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-900/30">
-          <Wifi className="w-10 h-10 text-indigo-500" />
+        <div className="p-4 rounded-2xl bg-[var(--color-bg)]/40 ring-1 ring-[var(--color-accent)]/30">
+          <img
+            src="/atlas-icon.svg"
+            alt="Atlas"
+            className="w-16 h-16 select-none"
+            draggable={false}
+          />
         </div>
       </div>
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-3">

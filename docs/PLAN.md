@@ -1,4 +1,4 @@
-# WiFi Troubleshooter — Project Plan
+# Atlas — Project Plan
 
 ## Goal
 A cross-platform desktop app that continuously (or on-demand) collects WiFi

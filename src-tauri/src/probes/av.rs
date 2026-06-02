@@ -18,9 +18,8 @@ use chrono::Utc;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::time::Duration;
-use tokio::time::timeout;
 
-use crate::probes::{dante, multicast};
+use crate::probes::{dante, iface as iface_probe, multicast};
 use crate::types::{
     AvDiagnosticsResult, AvWarning, DanteDevice, InterfaceMulticast, ScanResult,
 };
@@ -44,19 +43,43 @@ const DANTE_TCP_PORTS: &[u16] = &[4440, 4444, 4455, 8800];
 /// `ScanResult` so we can cross-reference Dante endpoints against the
 /// currently-associated Wi-Fi subnet.
 ///
+/// `pin_iface` lets the user pin every probe (mDNS browse, TCP control
+/// reachability sweep, and the Wi-Fi subnet cross-reference) to a
+/// specific NIC — typically a wired USB-Ethernet adapter on the audio
+/// VLAN. Passing `None` (or empty / "auto") keeps the previous
+/// kernel-default routing behaviour.
+///
 /// Safe to call concurrently with other diagnostics — each sub-probe
 /// either blocks in `spawn_blocking` or is async-safe.
-pub async fn collect(last_scan: Option<&ScanResult>) -> AvDiagnosticsResult {
-    let dante_handle = tokio::task::spawn_blocking(|| dante::browse_blocking(MDNS_WINDOW));
+pub async fn collect(
+    last_scan: Option<&ScanResult>,
+    pin_iface: Option<&str>,
+) -> AvDiagnosticsResult {
+    let pin = pin_iface
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
+        .map(|s| s.to_string());
+
+    let pin_for_dante = pin.clone();
+    let dante_handle = tokio::task::spawn_blocking(move || {
+        dante::browse_blocking(MDNS_WINDOW, pin_for_dante.as_deref())
+    });
     let multicast_handle = tokio::task::spawn_blocking(multicast::collect_blocking);
 
     let mut devices: Vec<DanteDevice> = dante_handle.await.unwrap_or_default();
     let multicast: Vec<InterfaceMulticast> = multicast_handle.await.unwrap_or_default();
 
+    // Resolve the IPv4 of the pinned interface up-front so the on-Wi-Fi
+    // cross-reference and the TCP probe both share one view.
+    let pin_iface_info = pin
+        .as_deref()
+        .and_then(iface_probe::find_by_name);
+
     // Augment each Dante device with TCP reachability + on-Wi-Fi flag.
-    let wifi_subnet = wifi_subnet_from_scan(last_scan);
+    let wifi_subnet = wifi_subnet_from_iface_or_scan(pin_iface_info.as_ref(), last_scan);
     for device in devices.iter_mut() {
-        device.control_ports_open = probe_dante_ports(&device.ip).await;
+        device.control_ports_open =
+            probe_dante_ports(&device.ip, pin.as_deref()).await;
         device.on_wifi = wifi_subnet
             .as_ref()
             .is_some_and(|(net, mask)| ip_in_subnet(&device.ip, *net, *mask));
@@ -69,7 +92,7 @@ pub async fn collect(last_scan: Option<&ScanResult>) -> AvDiagnosticsResult {
         .iter()
         .any(|d| d.services.iter().any(|s| s.contains("_aes67")));
 
-    let warnings = build_warnings(&devices, &multicast, last_scan);
+    let warnings = build_warnings(&devices, &multicast, last_scan, pin.as_deref());
 
     AvDiagnosticsResult {
         generated_at: Utc::now(),
@@ -84,17 +107,38 @@ pub async fn collect(last_scan: Option<&ScanResult>) -> AvDiagnosticsResult {
 
 /// Async TCP-connect probe of the well-known Dante control ports. Returns
 /// the subset that accepted a connection within `TCP_CONNECT_TIMEOUT`.
-async fn probe_dante_ports(ip: &str) -> Vec<u16> {
+///
+/// When `pin_iface` is set, every probe is dispatched from a socket
+/// pinned to that NIC (macOS `IP_BOUND_IF`, Linux `SO_BINDTODEVICE`),
+/// so the kernel cannot silently route the probe out the Wi-Fi
+/// interface instead of the wired audio VLAN.
+async fn probe_dante_ports(ip: &str, pin_iface: Option<&str>) -> Vec<u16> {
     let mut open = Vec::new();
     for &port in DANTE_TCP_PORTS {
-        let addr = format!("{ip}:{port}");
-        let fut = tokio::net::TcpStream::connect(addr);
-        match timeout(TCP_CONNECT_TIMEOUT, fut).await {
-            Ok(Ok(_)) => open.push(port),
-            _ => {}
+        if iface_probe::tcp_connect_via_iface(pin_iface, ip, port, TCP_CONNECT_TIMEOUT).await {
+            open.push(port);
         }
     }
     open
+}
+
+/// Pick the subnet we'll use to flag Dante devices as "on Wi-Fi".
+///
+///   - If the caller pinned an interface AND that interface has an IPv4,
+///     use its IP as the subnet hint (a /24). This is the right answer
+///     for the explicit "diagnose AV from this wired NIC" workflow.
+///   - Otherwise fall back to the gateway IP from the last Wi-Fi scan
+///     (also as a /24) — the previous behaviour.
+fn wifi_subnet_from_iface_or_scan(
+    pin: Option<&iface_probe::NetworkInterfaceInfo>,
+    scan: Option<&ScanResult>,
+) -> Option<(Ipv4Addr, u8)> {
+    if let Some(info) = pin {
+        if let Some(ip) = info.ipv4.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
+            return Some((ip, 24));
+        }
+    }
+    wifi_subnet_from_scan(scan)
 }
 
 /// Pull (network, netmask) from the last scan's Wi-Fi link information.
@@ -138,6 +182,7 @@ fn build_warnings(
     devices: &[DanteDevice],
     multicast: &[InterfaceMulticast],
     scan: Option<&ScanResult>,
+    pin_iface: Option<&str>,
 ) -> Vec<AvWarning> {
     let mut out = Vec::new();
 
@@ -265,19 +310,23 @@ fn build_warnings(
     }
 
     // Wi-Fi specific. If we have a current Wi-Fi link AND devices found,
-    // remind that Dante's PoE-powered endpoints are normally wired.
-    if let Some(s) = scan {
-        if !devices.is_empty() && s.link.ssid.is_some() {
-            out.push(AvWarning {
-                severity: "info".into(),
-                category: "wifi".into(),
-                message: format!(
-                    "Diagnosing AV from a Wi-Fi host (SSID '{}'). For accurate PTP / multicast \
-                    measurements, plug this machine into the audio VLAN with a wired NIC — \
-                    Wi-Fi adds asymmetric latency and converts multicast to unicast.",
-                    s.link.ssid.as_deref().unwrap_or("?"),
-                ),
-            });
+    // remind that Dante's PoE-powered endpoints are normally wired —
+    // unless the user already pinned the diagnostics to a wired NIC, in
+    // which case the reminder is just noise.
+    if pin_iface.is_none() {
+        if let Some(s) = scan {
+            if !devices.is_empty() && s.link.ssid.is_some() {
+                out.push(AvWarning {
+                    severity: "info".into(),
+                    category: "wifi".into(),
+                    message: format!(
+                        "Diagnosing AV from a Wi-Fi host (SSID '{}'). For accurate PTP / multicast \
+                        measurements, plug this machine into the audio VLAN with a wired NIC — \
+                        Wi-Fi adds asymmetric latency and converts multicast to unicast.",
+                        s.link.ssid.as_deref().unwrap_or("?"),
+                    ),
+                });
+            }
         }
     }
 

@@ -223,6 +223,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas"
+version = "0.1.4"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "libc",
+ "mdns-sd",
+ "objc2",
+ "objc2-core-location",
+ "objc2-core-wlan",
+ "objc2-foundation",
+ "once_cell",
+ "parking_lot",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "socket2 0.5.10",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-updater",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5207,40 +5241,6 @@ dependencies = [
  "thiserror 2.0.18",
  "windows",
  "windows-core 0.61.2",
-]
-
-[[package]]
-name = "wifi-troubleshooter"
-version = "0.1.3"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "libc",
- "mdns-sd",
- "objc2",
- "objc2-core-location",
- "objc2-core-wlan",
- "objc2-foundation",
- "once_cell",
- "parking_lot",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "socket2 0.5.10",
- "tauri",
- "tauri-build",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-updater",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

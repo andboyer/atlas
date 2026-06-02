@@ -33,7 +33,7 @@ disconnects** (Clover, Square, Toast, etc.) — and recommend concrete fixes.
 ## Project structure
 
 ```
-wifi-troubleshooter/
+atlas/
 ├── src/                       # React frontend
 │   ├── components/            # UI components
 │   ├── store.ts               # Zustand store

@@ -4,6 +4,7 @@ pub mod channel_scan;
 pub mod dante;
 pub mod deep;
 pub mod dns_leak;
+pub mod iface;
 pub mod interference;
 #[cfg(target_os = "macos")]
 pub mod macos_corewlan;

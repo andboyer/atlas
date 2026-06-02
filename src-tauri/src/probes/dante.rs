@@ -10,7 +10,7 @@
 //! sample-rate, latency profile, and redundancy state (inferred from
 //! whether the same device announces on more than one IP).
 
-use mdns_sd::{ServiceDaemon, ServiceEvent};
+use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -42,8 +42,13 @@ struct Observation {
 /// `DanteDevice` per distinct hostname (the only stable identifier across
 /// Dante's redundant primary/secondary interfaces).
 ///
+/// When `pin_iface` is `Some(name)` the underlying mDNS daemon is
+/// restricted to that single NIC — typically a wired USB-Ethernet
+/// adapter on the audio VLAN. Passing `None` (or an empty / "auto"
+/// string) keeps the previous behaviour of browsing every up interface.
+///
 /// Safe to call from a blocking thread (e.g. `tokio::task::spawn_blocking`).
-pub fn browse_blocking(window: Duration) -> Vec<DanteDevice> {
+pub fn browse_blocking(window: Duration, pin_iface: Option<&str>) -> Vec<DanteDevice> {
     let mdns = match ServiceDaemon::new() {
         Ok(d) => d,
         Err(e) => {
@@ -51,6 +56,22 @@ pub fn browse_blocking(window: Duration) -> Vec<DanteDevice> {
             return Vec::new();
         }
     };
+
+    // Pin the daemon to a specific NIC when the caller asked for one. We
+    // disable all interfaces first so the user's selection is the *only*
+    // path Dante traffic crosses — critical when Dante lives on a
+    // separate VLAN that's only reachable via a wired adapter.
+    let pin = pin_iface
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"));
+    if let Some(name) = pin {
+        if let Err(e) = mdns.disable_interface(IfKind::All) {
+            tracing::warn!("dante mDNS: disable_interface(All) failed: {e}");
+        }
+        if let Err(e) = mdns.enable_interface(IfKind::Name(name.to_string())) {
+            tracing::warn!("dante mDNS: enable_interface({name}) failed: {e}");
+        }
+    }
 
     let receivers: Vec<_> = DANTE_TYPES
         .iter()

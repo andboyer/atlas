@@ -115,6 +115,7 @@ const DEFAULT_SETTINGS: Settings = {
   watchlist: [],
   pos_targets: [],
   onboarding_complete: false,
+  preferred_av_interface: "",
 };
 
 interface MonitorStatus {
@@ -314,8 +315,10 @@ export const useApp = create<AppState>((set, get) => ({
   loadAvDiagnostics: async () => {
     set({ avDiagnosticsLoading: true, avDiagnosticsError: null });
     try {
+      const iface = (get().settings.preferred_av_interface || "").trim();
       const result = await invoke<AvDiagnosticsResult>("run_av_diagnostics", {
         lastScan: get().lastScan,
+        iface: iface || null,
       });
       set({ avDiagnostics: result, avDiagnosticsLoading: false });
     } catch (e) {
@@ -327,9 +330,10 @@ export const useApp = create<AppState>((set, get) => ({
   runDeepProbe: async (kind: string) => {
     set({ deepProbeRunning: true, deepProbeError: null });
     try {
+      const iface = (get().settings.preferred_av_interface || "").trim();
       const deep = await invoke<import("./types").DeepProbeResult>(
         "run_deep_probes",
-        { kind },
+        { kind, iface: iface || null },
       );
       const current = get().avDiagnostics;
       if (current) {

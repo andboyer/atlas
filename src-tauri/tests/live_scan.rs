@@ -7,12 +7,12 @@
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn live_macos_full_scan() {
-    let c = wifi_troubleshooter_lib::collectors::default_collector();
+    let c = atlas_lib::collectors::default_collector();
     let link = c.link_stats().await.expect("link stats");
     println!("\nLINK: {link:#?}");
     let reach = c.reachability().await.expect("reachability");
     println!("\nREACH: {reach:#?}");
-    let devices = wifi_troubleshooter_lib::discovery::scan::discover_and_probe().await;
+    let devices = atlas_lib::discovery::scan::discover_and_probe().await;
     println!("\nDEVICES: {} found", devices.len());
     for d in devices.iter().take(30) {
         println!(
@@ -32,12 +32,12 @@ async fn live_macos_full_scan() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn live_macos_findings() {
-    use wifi_troubleshooter_lib::detect;
-    use wifi_troubleshooter_lib::detect::{Context, ProfileHints};
-    let c = wifi_troubleshooter_lib::collectors::default_collector();
+    use atlas_lib::detect;
+    use atlas_lib::detect::{Context, ProfileHints};
+    let c = atlas_lib::collectors::default_collector();
     let link = c.link_stats().await.expect("link stats");
     let reach = c.reachability().await.expect("reachability");
-    let devices = wifi_troubleshooter_lib::discovery::scan::discover_and_probe().await;
+    let devices = atlas_lib::discovery::scan::discover_and_probe().await;
     let findings = detect::evaluate(&Context {
         link: &link,
         reach: &reach,

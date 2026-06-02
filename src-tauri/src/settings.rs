@@ -33,6 +33,14 @@ pub struct Settings {
     /// True after the user has completed the first-run onboarding wizard.
     #[serde(default)]
     pub onboarding_complete: bool,
+
+    /// Name of the NIC the AV-over-IP probes should pin themselves to
+    /// (`en0`, `en4`, …). Empty / unset means "let the kernel pick" — the
+    /// previous behaviour. Useful when the host is on Wi-Fi but the audio
+    /// VLAN only reaches a wired USB-Ethernet adapter, which is the common
+    /// AV troubleshooting case.
+    #[serde(default)]
+    pub preferred_av_interface: String,
 }
 
 impl Default for Settings {
@@ -56,6 +64,7 @@ impl Default for Settings {
             watchlist: vec![],
             pos_targets: vec![],
             onboarding_complete: false,
+            preferred_av_interface: String::new(),
         }
     }
 }

@@ -279,6 +279,18 @@ export interface Settings {
   watchlist: string[];
   pos_targets: string[];
   onboarding_complete: boolean;
+  /** Kernel name of the NIC AV-over-IP probes should pin to (e.g. `"en4"`).
+   *  Empty string means "let the kernel pick" (the previous behaviour). */
+  preferred_av_interface: string;
+}
+
+/** One network interface returned by the `list_network_interfaces` Tauri
+ *  command. The settings UI uses this to populate the AV NIC picker. */
+export interface NetworkInterfaceInfo {
+  name: string;
+  ipv4: string | null;
+  is_up: boolean;
+  is_loopback: boolean;
 }
 
 // ─── Wi-Fi system events (Play C) ────────────────────────────────────────

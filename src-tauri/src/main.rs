@@ -7,8 +7,8 @@ fn main() {
     // run the probe, print JSON to stdout, and exit BEFORE the Tauri GUI
     // is initialised. The GUI side parses our stdout into a DeepProbeResult.
     let args: Vec<String> = std::env::args().collect();
-    if let Some(code) = wifi_troubleshooter_lib::try_handle_probe_args(&args) {
+    if let Some(code) = atlas_lib::try_handle_probe_args(&args) {
         std::process::exit(code);
     }
-    wifi_troubleshooter_lib::run()
+    atlas_lib::run()
 }

@@ -47,7 +47,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let app_dir = app.path().app_data_dir().expect("app data dir resolvable");
-            let db_path = app_dir.join("wifi-troubleshooter.sqlite");
+            let db_path = app_dir.join("atlas.sqlite");
             let settings_path = Settings::path_for(&app_dir);
             let store = Store::open(db_path).expect("open store");
             app.manage(AppState {
@@ -102,6 +102,7 @@ pub fn run() {
             commands::radio_insights,
             commands::run_av_diagnostics,
             commands::run_deep_probes,
+            commands::list_network_interfaces,
             commands::av_insights,
             commands::chat_query,
             commands::get_payload_preview,

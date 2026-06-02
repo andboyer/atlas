@@ -6,7 +6,7 @@
 //! `--probe <kind>` args via:
 //!
 //! ```text
-//! osascript -e 'do shell script "/path/to/wifi-troubleshooter --probe igmp-listen --iface en0 --secs 12" with administrator privileges'
+//! osascript -e 'do shell script "/path/to/atlas --probe igmp-listen --iface en0 --secs 12" with administrator privileges'
 //! ```
 //!
 //! macOS pops its native auth prompt (cached ~5 min) and our binary runs

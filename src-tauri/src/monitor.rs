@@ -226,7 +226,7 @@ fn maybe_notify(app: &AppHandle, result: &ScanResult) {
         if let Err(e) = app
             .notification()
             .builder()
-            .title("WiFi Troubleshooter")
+            .title("Atlas")
             .body(&body)
             .show()
         {
