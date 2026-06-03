@@ -65,6 +65,9 @@ pub fn run() {
                 sampler_handle: Mutex::new(None),
                 wifi_events_handle: Mutex::new(None),
                 narrator_handle: Mutex::new(None),
+                last_av_diagnostics: Mutex::new(None),
+                last_deep_probe: Mutex::new(None),
+                recent_stress_results: Mutex::new(Vec::new()),
             });
             // Auto-start is driven from the frontend on first launch via
             // `bootstrapMonitor()` in the Zustand store: settings default to

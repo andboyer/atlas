@@ -2,7 +2,7 @@ use crate::collectors::default_collector;
 use crate::detect::{self, AnomalySignal, Context};
 use crate::settings::Settings;
 use crate::store::{DeviceEvent, IncidentCorrelation, MetricSample, ScanSummary, Store};
-use crate::types::{AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, ScanResult};
+use crate::types::{AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, ScanResult, StressTestResult};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -55,6 +55,20 @@ pub struct AppState {
     pub wifi_events_handle: Mutex<Option<crate::wifi_events::WifiEventsHandle>>,
     /// Handle to the causal narrator (watches the sampler ring for anomalies).
     pub narrator_handle: Mutex<Option<crate::narrator::NarratorHandle>>,
+    /// Most recent AV-over-IP diagnostics result, populated whenever
+    /// `run_av_diagnostics` is invoked. Used by `export_report` so the
+    /// printed report carries Dante / multicast / heuristic warnings even
+    /// though the AV sweep runs on-demand outside the scan pipeline.
+    pub last_av_diagnostics: Mutex<Option<AvDiagnosticsResult>>,
+    /// Most recent deep-probe result (IGMP / PTP / DSCP / LLDP / link
+    /// audit / SAP), populated by `run_deep_probes`. Each call merges its
+    /// populated field into this cache so the report can show every probe
+    /// the operator has ever run during this session.
+    pub last_deep_probe: Mutex<Option<DeepProbeResult>>,
+    /// Ring of recent stress-test results (most recent first, capped at 20),
+    /// populated by `run_stress_test`. Included in the exported report so
+    /// the operator can show "here's the active stress evidence I captured".
+    pub recent_stress_results: Mutex<Vec<StressTestResult>>,
 }
 
 #[tauri::command]
@@ -490,9 +504,19 @@ pub async fn list_stress_tests() -> Result<Vec<StressTestDescriptor>, String> {
 #[tauri::command]
 pub async fn run_stress_test(
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
     kind: String,
 ) -> Result<crate::types::StressTestResult, String> {
-    crate::stress::run(app, &kind).await
+    let result = crate::stress::run(app, &kind).await?;
+    // Cache for the printable report. Keep most recent first, cap at 20.
+    {
+        let mut ring = state.recent_stress_results.lock();
+        ring.insert(0, result.clone());
+        if ring.len() > 20 {
+            ring.truncate(20);
+        }
+    }
+    Ok(result)
 }
 
 /// Snapshot of the causal-narrative ring buffer (auto-generated explanations
@@ -734,11 +758,22 @@ pub async fn export_report(
         .map(|h| h.ring.read().iter().cloned().collect())
         .unwrap_or_default();
 
+    // Optional on-demand context the operator may have captured via the
+    // AV / Stress tabs. These are cached in AppState by the corresponding
+    // commands and survive into the printed report without requiring the
+    // frontend to re-pass them.
+    let av_diag: Option<AvDiagnosticsResult> = state.last_av_diagnostics.lock().clone();
+    let deep_probe: Option<DeepProbeResult> = state.last_deep_probe.lock().clone();
+    let stress_results: Vec<StressTestResult> = state.recent_stress_results.lock().clone();
+
     Ok(render_html_report(
         &scan,
         &samples,
         &wifi_events,
         &narratives,
+        av_diag.as_ref(),
+        deep_probe.as_ref(),
+        &stress_results,
     ))
 }
 
@@ -796,39 +831,46 @@ fn render_html_report(
     samples: &[crate::types::LiveSample],
     wifi_events: &[crate::types::WifiEvent],
     narratives: &[crate::types::Narrative],
+    av_diag: Option<&AvDiagnosticsResult>,
+    deep_probe: Option<&DeepProbeResult>,
+    stress_results: &[StressTestResult],
 ) -> String {
+    // ── Helper: a simple definition-list table for "key: value" panels.
+    // Used by every "details panel" section below so they share styling
+    // and so we get consistent print rendering.
+    fn dl_table(rows: &[(&str, String)]) -> String {
+        if rows.iter().all(|(_, v)| v.is_empty()) {
+            return String::new();
+        }
+        let body: String = rows
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| {
+                format!(
+                    "<tr><th style=\"width:34%;text-align:left;color:#94a3b8;font-weight:500\">{}</th><td>{}</td></tr>",
+                    html_escape(k),
+                    v
+                )
+            })
+            .collect();
+        format!("<table>{body}</table>")
+    }
+    fn opt_str<T: std::fmt::Display>(v: &Option<T>) -> String {
+        match v {
+            Some(x) => html_escape(&x.to_string()),
+            None => String::new(),
+        }
+    }
+    fn opt_fmt<T, F: Fn(&T) -> String>(v: &Option<T>, f: F) -> String {
+        v.as_ref().map(f).map(|s| html_escape(&s)).unwrap_or_default()
+    }
+
     let severity_color = |s: &crate::types::Severity| match s {
         crate::types::Severity::Critical => "#ef4444",
         crate::types::Severity::High => "#f97316",
         crate::types::Severity::Medium => "#eab308",
         crate::types::Severity::Low => "#3b82f6",
         crate::types::Severity::Info => "#6b7280",
-    };
-
-    let findings_html: String = if scan.findings.is_empty() {
-        "<p style='color:#6b7280'>No findings — network looks healthy.</p>".into()
-    } else {
-        scan.findings
-            .iter()
-            .map(|f| {
-                let color = severity_color(&f.severity);
-                let evidence = f
-                    .evidence
-                    .iter()
-                    .map(|e| format!("<li>{}</li>", html_escape(e)))
-                    .collect::<String>();
-                format!(
-                    r#"<div style="border-left:4px solid {color};padding:8px 12px;margin:8px 0;background:#1a1a2e">
-  <strong style="color:{color}">[{sev}]</strong> {title}
-  <ul style="margin:4px 0 0 16px;color:#aaa">{evidence}</ul>
-</div>"#,
-                    color = color,
-                    sev = f.severity.as_str().to_uppercase(),
-                    title = html_escape(&f.title),
-                    evidence = evidence,
-                )
-            })
-            .collect()
     };
 
     let recs_html: String = if scan.recommendations.is_empty() {
@@ -842,14 +884,88 @@ fn render_html_report(
                     .iter()
                     .map(|s| format!("<li>{}</li>", html_escape(s)))
                     .collect::<String>();
+                let links = if r.links.is_empty() {
+                    String::new()
+                } else {
+                    let chips: String = r
+                        .links
+                        .iter()
+                        .map(|l| {
+                            format!(
+                                "<a href=\"{}\" style=\"display:inline-block;margin:2px 6px 0 0;padding:2px 8px;background:#1e293b;color:#93c5fd;border-radius:4px;text-decoration:none;font-size:12px\">🔗 {}</a>",
+                                html_escape(&l.url),
+                                html_escape(&l.label),
+                            )
+                        })
+                        .collect();
+                    format!("<div style=\"margin-top:6px\">{chips}</div>")
+                };
+                let auto = if r.auto_fix_available {
+                    "<span style=\"display:inline-block;margin-left:8px;padding:1px 6px;background:#065f46;color:#a7f3d0;border-radius:3px;font-size:11px\">auto-fix available</span>"
+                } else {
+                    ""
+                };
                 format!(
                     r#"<div style="margin:8px 0;padding:8px 12px;background:#1a1a2e;border-radius:6px">
-  <strong>{title}</strong><br><span style="color:#aaa">{summary}</span>
+  <strong>{title}</strong>{auto}<br><span style="color:#aaa">{summary}</span>
   <ol style="margin:4px 0 0 16px;color:#ccc">{steps}</ol>
+  {links}
 </div>"#,
                     title = html_escape(&r.title),
                     summary = html_escape(&r.summary),
                     steps = steps,
+                    links = links,
+                    auto = auto,
+                )
+            })
+            .collect()
+    };
+
+    // Findings re-rendered with confidence + affected devices + observed_at.
+    let findings_html: String = if scan.findings.is_empty() {
+        "<p style='color:#6b7280'>No findings — network looks healthy.</p>".into()
+    } else {
+        scan.findings
+            .iter()
+            .map(|f| {
+                let color = severity_color(&f.severity);
+                let evidence = f
+                    .evidence
+                    .iter()
+                    .map(|e| format!("<li>{}</li>", html_escape(e)))
+                    .collect::<String>();
+                let affected = if f.affected_devices.is_empty() {
+                    String::new()
+                } else {
+                    let chips: String = f
+                        .affected_devices
+                        .iter()
+                        .map(|d| {
+                            format!(
+                                "<code style=\"background:#0f172a;color:#cbd5e1;padding:1px 6px;border-radius:3px;font-size:11px;margin-right:4px\">{}</code>",
+                                html_escape(d)
+                            )
+                        })
+                        .collect();
+                    format!("<p style=\"margin:4px 0 0;color:#94a3b8;font-size:12px\"><strong>Affected:</strong> {chips}</p>")
+                };
+                format!(
+                    r#"<div style="border-left:4px solid {color};padding:8px 12px;margin:8px 0;background:#1a1a2e">
+  <div style="display:flex;justify-content:space-between;gap:12px">
+    <span><strong style="color:{color}">[{sev}]</strong> {title}</span>
+    <span style="color:#64748b;font-family:monospace;font-size:11px">conf {conf:.0}% · {at} · rule {rule}</span>
+  </div>
+  <ul style="margin:4px 0 0 16px;color:#aaa">{evidence}</ul>
+  {affected}
+</div>"#,
+                    color = color,
+                    sev = f.severity.as_str().to_uppercase(),
+                    title = html_escape(&f.title),
+                    evidence = evidence,
+                    affected = affected,
+                    conf = (f.confidence * 100.0).round(),
+                    at = f.observed_at.format("%H:%M:%S"),
+                    rule = html_escape(&f.rule_id),
                 )
             })
             .collect()
@@ -864,14 +980,36 @@ fn render_html_report(
                 .latency_ms
                 .map(|ms| format!("{ms:.0} ms"))
                 .unwrap_or_else(|| "—".into());
+            let services = if d.services.is_empty() {
+                String::new()
+            } else {
+                d.services
+                    .iter()
+                    .map(|s| {
+                        format!(
+                            "<code style=\"background:#0f172a;color:#93c5fd;padding:1px 5px;border-radius:3px;font-size:11px;margin-right:3px\">{}</code>",
+                            html_escape(s)
+                        )
+                    })
+                    .collect()
+            };
             format!(
-                "<tr><td>{status}</td><td style='font-family:monospace'>{mac}</td>\
-                 <td>{host}</td><td>{class:?}</td><td>{latency}</td></tr>",
+                "<tr><td>{status}</td>\
+                 <td style='font-family:monospace'>{mac}</td>\
+                 <td style='font-family:monospace;color:#cbd5e1'>{ip}</td>\
+                 <td>{host}</td>\
+                 <td>{class:?}</td>\
+                 <td style='color:#94a3b8'>{vendor}</td>\
+                 <td>{latency}</td>\
+                 <td>{services}</td></tr>",
                 status = status,
                 mac = html_escape(&d.mac),
+                ip = html_escape(d.ip.as_deref().unwrap_or("—")),
                 host = html_escape(d.hostname.as_deref().unwrap_or("—")),
                 class = d.class,
+                vendor = html_escape(d.vendor.as_deref().unwrap_or("—")),
                 latency = latency,
+                services = services,
             )
         })
         .collect();
@@ -1027,6 +1165,671 @@ fn render_html_report(
         )
     };
 
+    // ── Link details panel (every field on LinkStats) ─────────────────────
+    let link = &scan.link;
+    let link_html: String = {
+        let rows = [
+            ("SSID", opt_str(&link.ssid)),
+            ("BSSID", opt_str(&link.bssid)),
+            ("Vendor (OUI)", opt_str(&link.vendor)),
+            ("Band", opt_str(&link.band)),
+            ("Channel", opt_str(&link.channel)),
+            ("Channel width", opt_fmt(&link.channel_width_mhz, |v| format!("{v} MHz"))),
+            ("RSSI", opt_fmt(&link.rssi_dbm, |v| format!("{v} dBm"))),
+            ("Noise", opt_fmt(&link.noise_dbm, |v| format!("{v} dBm"))),
+            ("SNR", opt_fmt(&link.snr_db, |v| format!("{v} dB"))),
+            ("TX rate", opt_fmt(&link.tx_rate_mbps, |v| format!("{v:.1} Mb/s"))),
+            ("RX rate", opt_fmt(&link.rx_rate_mbps, |v| format!("{v:.1} Mb/s"))),
+            ("Security", opt_str(&link.security)),
+            ("PHY mode", opt_str(&link.phy_mode)),
+            ("Wi-Fi generation", opt_str(&link.wifi_generation)),
+        ];
+        let body = dl_table(&rows);
+        if body.is_empty() {
+            String::new()
+        } else {
+            format!("<h2>Link details</h2>{body}")
+        }
+    };
+
+    // ── Reachability panel (every field on ReachabilityStats) ─────────────
+    let reach = &scan.reachability;
+    let reach_html: String = {
+        let rows = [
+            ("Gateway IP", opt_str(&reach.gateway_ip)),
+            ("Gateway latency", opt_fmt(&reach.gateway_latency_ms, |v| format!("{v:.1} ms"))),
+            ("Internet latency", opt_fmt(&reach.internet_latency_ms, |v| format!("{v:.1} ms"))),
+            ("DNS latency", opt_fmt(&reach.dns_latency_ms, |v| format!("{v:.1} ms"))),
+            ("Packet loss", opt_fmt(&reach.packet_loss_pct, |v| format!("{v:.1}%"))),
+        ];
+        let body = dl_table(&rows);
+        if body.is_empty() { String::new() } else { format!("<h2>Reachability</h2>{body}") }
+    };
+
+    // ── Connection extras (DNS leak, MTU, speed) ──────────────────────────
+    let extras_html: String = {
+        let rows = [
+            (
+                "DNS leak",
+                if scan.dns_leak { "<span style=\"color:#ef4444\">⚠ detected</span>".to_string() } else { "—".to_string() },
+            ),
+            ("Path MTU", opt_fmt(&scan.mtu_bytes, |v| format!("{v} bytes"))),
+            ("Throughput", opt_fmt(&scan.speed_mbps, |v| format!("{v:.1} Mb/s"))),
+        ];
+        let body = dl_table(&rows);
+        if body.is_empty() { String::new() } else { format!("<h2>Connection extras</h2>{body}") }
+    };
+
+    // ── WAN / ISP ─────────────────────────────────────────────────────────
+    let wan_html: String = match &scan.wan {
+        None => String::new(),
+        Some(w) => {
+            let rows = [
+                ("Public IPv4", opt_str(&w.public_ipv4)),
+                ("Public IPv6", opt_str(&w.public_ipv6)),
+                ("Dual-stack", if w.dual_stack { "yes".into() } else { "no".into() }),
+                ("ASN", opt_fmt(&w.asn, |v| format!("AS{v}"))),
+                ("ISP", opt_str(&w.isp)),
+                ("Country", opt_str(&w.country)),
+                ("Region", opt_str(&w.region)),
+            ];
+            let body = dl_table(&rows);
+            if body.is_empty() { String::new() } else { format!("<h2>WAN / ISP</h2>{body}") }
+        }
+    };
+
+    // ── Quality / bufferbloat ─────────────────────────────────────────────
+    let quality_html: String = match &scan.quality {
+        None => String::new(),
+        Some(q) => {
+            let rows = [
+                ("Downlink throughput", opt_fmt(&q.dl_throughput_mbps, |v| format!("{v:.1} Mb/s"))),
+                ("Uplink throughput", opt_fmt(&q.ul_throughput_mbps, |v| format!("{v:.1} Mb/s"))),
+                ("Responsiveness", opt_fmt(&q.responsiveness_rpm, |v| format!("{v} RPM"))),
+                ("Responsiveness label", opt_str(&q.responsiveness_label)),
+                ("Idle latency", opt_fmt(&q.idle_latency_ms, |v| format!("{v:.1} ms"))),
+            ];
+            let body = dl_table(&rows);
+            if body.is_empty() { String::new() } else { format!("<h2>Quality / bufferbloat</h2>{body}") }
+        }
+    };
+
+    // ── Interference / channel scoring ────────────────────────────────────
+    let interference_html: String = match &scan.interference {
+        None => String::new(),
+        Some(ir) => {
+            let rec_24 = ir.recommended_24.map(|v| v.to_string()).unwrap_or_else(|| "—".into());
+            let rec_5 = ir.recommended_5.map(|v| v.to_string()).unwrap_or_else(|| "—".into());
+            let cur = ir
+                .current_channel_score
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_else(|| "—".into());
+            let rows: String = ir
+                .channels
+                .iter()
+                .take(20)
+                .map(|c| {
+                    let strongest = c
+                        .strongest_interferer_dbm
+                        .map(|v| format!("{v} dBm"))
+                        .unwrap_or_else(|| "—".into());
+                    format!(
+                        "<tr><td>{ch}</td><td>{band}</td><td>{score:.0}</td><td>{co}</td><td>{adj}</td><td>{si}</td></tr>",
+                        ch = c.channel,
+                        band = html_escape(&c.band),
+                        score = c.interference_score,
+                        co = c.co_channel_count,
+                        adj = c.adjacent_channel_count,
+                        si = strongest,
+                    )
+                })
+                .collect();
+            format!(
+                r#"<h2>Channel interference</h2>
+<p style="color:#94a3b8;margin:0 0 6px">Recommended 2.4 GHz channel: <strong>{rec_24}</strong> · Recommended 5 GHz channel: <strong>{rec_5}</strong> · Current channel score: <strong>{cur}</strong> <span style="color:#64748b">(lower = quieter)</span></p>
+<table>
+<tr><th>Channel</th><th>Band</th><th>Score</th><th>Co-channel</th><th>Adjacent</th><th>Strongest</th></tr>
+{rows}</table>"#
+            )
+        }
+    };
+
+    // ── PHY efficiency ────────────────────────────────────────────────────
+    let phy_html: String = match &scan.phy_efficiency {
+        None => String::new(),
+        Some(p) => {
+            let pct = (p.efficiency * 100.0).round();
+            let rows = [
+                ("PHY mode", html_escape(&p.phy_mode)),
+                ("Theoretical max", format!("{:.0} Mb/s", p.theoretical_max_mbps)),
+                ("Actual TX rate", format!("{:.0} Mb/s", p.actual_mbps)),
+                ("Efficiency", format!("{pct:.0}%")),
+                ("Grade", html_escape(&p.grade)),
+                ("Diagnostic", html_escape(&p.diagnostic)),
+            ]
+            .map(|(k, v)| (k, v));
+            let body = dl_table(&rows);
+            format!("<h2>PHY-rate efficiency</h2>{body}")
+        }
+    };
+
+    // ── Roaming ───────────────────────────────────────────────────────────
+    let roaming_html: String = match &scan.roaming {
+        None => String::new(),
+        Some(r) => {
+            let summary = format!(
+                "<p style=\"color:#94a3b8\">Roams in last hour: <strong>{}</strong> · last 24h: <strong>{}</strong> · avg dwell: <strong>{}</strong>{}</p>",
+                r.events_last_hour,
+                r.events_last_24h,
+                r.avg_dwell_secs.map(|v| format!("{v} s")).unwrap_or_else(|| "—".into()),
+                if r.sticky_warning { " · <span style=\"color:#f97316\">⚠ sticky client</span>" } else { "" },
+            );
+            let events = if r.recent_events.is_empty() {
+                String::new()
+            } else {
+                let rows: String = r
+                    .recent_events
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "<tr><td style=\"font-family:monospace;font-size:11px\">{ts}</td><td>{ssid}</td><td style=\"font-family:monospace\">{from}</td><td style=\"font-family:monospace\">{to}</td><td>{rssi}</td></tr>",
+                            ts = e.at.format("%H:%M:%S"),
+                            ssid = html_escape(e.ssid.as_deref().unwrap_or("—")),
+                            from = html_escape(e.from_bssid.as_deref().unwrap_or("—")),
+                            to = html_escape(e.to_bssid.as_deref().unwrap_or("—")),
+                            rssi = e.rssi_at_roam_dbm.map(|v| format!("{v} dBm")).unwrap_or_else(|| "—".into()),
+                        )
+                    })
+                    .collect();
+                format!(
+                    r#"<table><tr><th>Time</th><th>SSID</th><th>From</th><th>To</th><th>RSSI</th></tr>{rows}</table>"#
+                )
+            };
+            format!("<h2>Roaming</h2>{summary}{events}")
+        }
+    };
+
+    // ── Rogue / evil-twin ─────────────────────────────────────────────────
+    let rogue_html: String = if scan.rogue_aps.is_empty() {
+        String::new()
+    } else {
+        let rows: String = scan
+            .rogue_aps
+            .iter()
+            .map(|r| {
+                let color = severity_color(&r.severity);
+                let bssids = r
+                    .bssids
+                    .iter()
+                    .map(|b| format!("<code style=\"background:#0f172a;color:#cbd5e1;padding:1px 5px;border-radius:3px;font-size:11px;margin-right:3px\">{}</code>", html_escape(b)))
+                    .collect::<String>();
+                let secs = r
+                    .security_modes
+                    .iter()
+                    .map(|s| html_escape(s))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "<tr><td style=\"color:{color}\">[{sev}]</td><td>{ssid}</td><td>{bssids}</td><td>{secs}</td><td>{reason}</td></tr>",
+                    color = color,
+                    sev = r.severity.as_str().to_uppercase(),
+                    ssid = html_escape(&r.ssid),
+                    bssids = bssids,
+                    secs = secs,
+                    reason = html_escape(&r.reason),
+                )
+            })
+            .collect();
+        format!(
+            r#"<h2>Rogue / evil-twin APs ({n})</h2>
+<table><tr><th>Severity</th><th>SSID</th><th>BSSIDs</th><th>Security modes</th><th>Reason</th></tr>{rows}</table>"#,
+            n = scan.rogue_aps.len()
+        )
+    };
+
+    // ── Alternate AP suggestion ───────────────────────────────────────────
+    let alt_html: String = match &scan.alternate_ap {
+        None => String::new(),
+        Some(a) => {
+            format!(
+                r#"<h2>Better AP available</h2>
+<div style="padding:10px 14px;background:#1a1a2e;border-left:4px solid #34d399;border-radius:0 6px 6px 0">
+  <p style="margin:0">Stronger AP on <strong>{ssid}</strong>: roam from <code>{cur_b}</code> @ {cur_r} dBm to <code>{alt_b}</code> @ {alt_r} dBm <strong style="color:#34d399">(+{imp} dB)</strong>{ch}{band}</p>
+</div>"#,
+                ssid = html_escape(&a.ssid),
+                cur_b = html_escape(a.current_bssid.as_deref().unwrap_or("—")),
+                cur_r = a.current_rssi_dbm,
+                alt_b = html_escape(&a.alternate_bssid),
+                alt_r = a.alternate_rssi_dbm,
+                imp = a.improvement_db,
+                ch = a.alternate_channel.map(|v| format!(" · ch {v}")).unwrap_or_default(),
+                band = a.alternate_band.as_deref().map(|b| format!(" · {}", html_escape(b))).unwrap_or_default(),
+            )
+        }
+    };
+
+    // ── Nearby APs ────────────────────────────────────────────────────────
+    let nearby_html: String = if scan.nearby_aps.is_empty() {
+        String::new()
+    } else {
+        let rows: String = scan
+            .nearby_aps
+            .iter()
+            .map(|ap| {
+                let ssid_label = match (ap.ssid.as_deref(), ap.name_redacted) {
+                    (Some(s), true) => format!("{} <span style=\"color:#64748b;font-size:11px\">(hidden)</span>", html_escape(s)),
+                    (Some(s), false) => html_escape(s),
+                    (None, _) => "—".into(),
+                };
+                format!(
+                    "<tr><td>{ssid}</td><td style=\"font-family:monospace\">{bssid}</td><td>{band}</td><td>{ch}</td><td>{width}</td><td>{rssi}</td><td>{sec}</td><td>{phy}</td><td>{vendor}</td></tr>",
+                    ssid = ssid_label,
+                    bssid = html_escape(ap.bssid.as_deref().unwrap_or("—")),
+                    band = html_escape(ap.band.as_deref().unwrap_or("—")),
+                    ch = ap.channel.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                    width = ap.width_mhz.map(|v| format!("{v} MHz")).unwrap_or_else(|| "—".into()),
+                    rssi = ap.rssi_dbm.map(|v| format!("{v} dBm")).unwrap_or_else(|| "—".into()),
+                    sec = html_escape(ap.security.as_deref().unwrap_or("—")),
+                    phy = html_escape(ap.phy_mode.as_deref().unwrap_or("—")),
+                    vendor = html_escape(ap.vendor.as_deref().unwrap_or("—")),
+                )
+            })
+            .collect();
+        format!(
+            r#"<h2>Nearby access points ({n})</h2>
+<table><tr><th>SSID</th><th>BSSID</th><th>Band</th><th>Ch</th><th>Width</th><th>RSSI</th><th>Security</th><th>PHY</th><th>Vendor</th></tr>{rows}</table>"#,
+            n = scan.nearby_aps.len(),
+        )
+    };
+
+    // ── Trends ────────────────────────────────────────────────────────────
+    let trends_html: String = match &scan.trends {
+        None => String::new(),
+        Some(t) => {
+            if t.deltas.is_empty() {
+                String::new()
+            } else {
+                let rows: String = t
+                    .deltas
+                    .iter()
+                    .map(|d| {
+                        let color = match d.direction.as_str() {
+                            "improved" => "#34d399",
+                            "degraded" => "#ef4444",
+                            _ => "#94a3b8",
+                        };
+                        format!(
+                            "<tr><td>{label}</td><td>{cur:.2}</td><td>{prev:.2}</td><td style=\"color:{color}\">{delta:+.2}</td><td style=\"color:{color}\">{dir}</td></tr>",
+                            label = html_escape(&d.label),
+                            cur = d.current,
+                            prev = d.prev_hour_avg,
+                            delta = d.delta,
+                            color = color,
+                            dir = html_escape(&d.direction),
+                        )
+                    })
+                    .collect();
+                format!(
+                    r#"<h2>Trends (hour-over-hour, {n} samples)</h2>
+<table><tr><th>Metric</th><th>Current</th><th>Prev-hour avg</th><th>Δ</th><th>Direction</th></tr>{rows}</table>"#,
+                    n = t.samples_considered
+                )
+            }
+        }
+    };
+
+    // ── AV-over-IP diagnostics ────────────────────────────────────────────
+    let av_html: String = match av_diag {
+        None => String::new(),
+        Some(av) => {
+            let warnings = if av.warnings.is_empty() {
+                String::new()
+            } else {
+                let rows: String = av
+                    .warnings
+                    .iter()
+                    .map(|w| {
+                        let color = match w.severity.as_str() {
+                            "critical" => "#ef4444",
+                            "warn" | "warning" => "#f97316",
+                            _ => "#3b82f6",
+                        };
+                        format!(
+                            "<tr><td style=\"color:{color}\">[{sev}]</td><td>{cat}</td><td>{msg}</td></tr>",
+                            color = color,
+                            sev = html_escape(&w.severity).to_uppercase(),
+                            cat = html_escape(&w.category),
+                            msg = html_escape(&w.message),
+                        )
+                    })
+                    .collect();
+                format!(
+                    "<h3>AV warnings</h3><table><tr><th>Severity</th><th>Category</th><th>Message</th></tr>{rows}</table>"
+                )
+            };
+            let dante = if av.dante_devices.is_empty() {
+                String::new()
+            } else {
+                let rows: String = av
+                    .dante_devices
+                    .iter()
+                    .map(|d| {
+                        let ports = d
+                            .control_ports_open
+                            .iter()
+                            .map(|p| p.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!(
+                            "<tr><td style=\"font-family:monospace\">{ip}</td><td>{host}</td><td>{model}</td><td>{mfr}</td><td>{tx}/{rx}</td><td>{sr}</td><td>{lat}</td><td>{red}</td><td>{wifi}</td><td>{ports}</td></tr>",
+                            ip = html_escape(&d.ip),
+                            host = html_escape(d.hostname.as_deref().unwrap_or("—")),
+                            model = html_escape(d.model.as_deref().unwrap_or("—")),
+                            mfr = html_escape(d.manufacturer.as_deref().unwrap_or("—")),
+                            tx = d.tx_channels.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                            rx = d.rx_channels.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                            sr = d.sample_rate_hz.map(|v| format!("{v} Hz")).unwrap_or_else(|| "—".into()),
+                            lat = d.latency_profile_ms.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into()),
+                            red = html_escape(&d.redundancy),
+                            wifi = if d.on_wifi { "<span style=\"color:#ef4444\">⚠ Wi-Fi</span>" } else { "wired" },
+                            ports = ports,
+                        )
+                    })
+                    .collect();
+                format!(
+                    "<h3>Dante / AES67 endpoints ({n})</h3><table><tr><th>IP</th><th>Host</th><th>Model</th><th>Mfr</th><th>TX/RX ch</th><th>SR</th><th>Lat</th><th>Redundancy</th><th>Transport</th><th>Ctrl ports</th></tr>{rows}</table>",
+                    n = av.dante_devices.len(),
+                )
+            };
+            let multicast = if av.multicast.is_empty() {
+                String::new()
+            } else {
+                let rows: String = av
+                    .multicast
+                    .iter()
+                    .map(|im| {
+                        let groups: String = im
+                            .groups
+                            .iter()
+                            .map(|g| {
+                                format!(
+                                    "<code style=\"background:#0f172a;color:#cbd5e1;padding:1px 5px;border-radius:3px;font-size:11px;margin:1px 3px 1px 0;display:inline-block\">{}<span style=\"color:#64748b\"> · {}</span></code>",
+                                    html_escape(&g.group),
+                                    html_escape(&g.purpose),
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "<tr><td style=\"font-family:monospace\">{iface}</td><td>{n}</td><td>{dante}</td><td>{ptp}</td><td>{groups}</td></tr>",
+                            iface = html_escape(&im.iface),
+                            n = im.group_count,
+                            dante = im.dante_audio_groups,
+                            ptp = im.ptp_groups,
+                            groups = groups,
+                        )
+                    })
+                    .collect();
+                format!(
+                    "<h3>Multicast groups</h3><table><tr><th>Interface</th><th>Groups</th><th>Dante audio</th><th>PTP</th><th>All</th></tr>{rows}</table>"
+                )
+            };
+            let banner = format!(
+                "<p style=\"color:#94a3b8\">Captured {ts} · DDM seen: <strong>{ddm}</strong> · AES67 seen: <strong>{aes}</strong></p>",
+                ts = av.generated_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                ddm = if av.ddm_seen { "yes" } else { "no" },
+                aes = if av.aes67_seen { "yes" } else { "no" },
+            );
+            format!("<h2>AV-over-IP diagnostics</h2>{banner}{warnings}{dante}{multicast}")
+        }
+    };
+
+    // ── Deep probes (IGMP / PTP / DSCP / LLDP / link audit / SAP) ─────────
+    let deep_html: String = match deep_probe {
+        None => String::new(),
+        Some(dp) => {
+            let mut sections: Vec<String> = Vec::new();
+            if let Some(i) = &dp.igmp {
+                let queriers = if i.queriers_seen.is_empty() {
+                    "<em>none observed</em>".to_string()
+                } else {
+                    i.queriers_seen
+                        .iter()
+                        .map(|q| {
+                            format!(
+                                "<li>from <code>{from}</code> v{ver} group <code>{grp}</code> (MRT {mrt} ds)</li>",
+                                from = html_escape(&q.from),
+                                ver = q.version,
+                                grp = html_escape(&q.group),
+                                mrt = q.max_resp_ds,
+                            )
+                        })
+                        .collect::<String>()
+                };
+                sections.push(format!(
+                    "<h3>IGMP listen ({secs}s on {iface})</h3><p>Verdict: <strong>{verdict}</strong> · reports {rep} · leaves {lv}{err}</p><ul>{queriers}</ul>",
+                    iface = html_escape(&i.iface),
+                    secs = i.listen_secs,
+                    verdict = html_escape(&i.verdict),
+                    rep = i.reports_seen,
+                    lv = i.leaves_seen,
+                    err = i.error.as_deref().map(|e| format!(" · error: {}", html_escape(e))).unwrap_or_default(),
+                    queriers = queriers,
+                ));
+            }
+            if let Some(p) = &dp.ptp {
+                let domains: String = p
+                    .domains
+                    .iter()
+                    .map(|d| {
+                        let gms: String = d
+                            .grandmasters
+                            .iter()
+                            .map(|gm| {
+                                format!(
+                                    "<li><code>{cid}</code> · class {cc} · acc {ca} · priority1 {p1} · src {src} · {seen} announces</li>",
+                                    cid = html_escape(&gm.clock_identity),
+                                    cc = gm.clock_class,
+                                    ca = gm.clock_accuracy,
+                                    p1 = gm.priority1,
+                                    src = html_escape(&gm.source_ip),
+                                    seen = gm.announces_seen,
+                                )
+                            })
+                            .collect();
+                        format!(
+                            "<li>Domain {dn} v{v} · profile {pr} · transport {tr} · announce log2 {al} · sync log2 {sl} · {sa} syncs{jit}<ul>{gms}</ul></li>",
+                            dn = d.domain_number,
+                            v = d.version,
+                            pr = html_escape(&d.profile),
+                            tr = html_escape(&d.transport),
+                            al = d.announce_interval_log2,
+                            sl = d.sync_interval_log2,
+                            sa = d.sync_arrivals,
+                            jit = d.sync_jitter_us.map(|v| format!(" · jitter {v:.1} µs")).unwrap_or_default(),
+                            gms = gms,
+                        )
+                    })
+                    .collect();
+                sections.push(format!(
+                    "<h3>PTP listen ({secs}s on {iface})</h3><p>Verdict: <strong>{verdict}</strong> · {gms} grandmaster(s){comp}{err}</p><ul>{domains}</ul>",
+                    iface = html_escape(&p.iface),
+                    secs = p.listen_secs,
+                    verdict = html_escape(&p.verdict),
+                    gms = p.grandmaster_count,
+                    comp = if p.competing_gm_observed { " · <span style=\"color:#ef4444\">⚠ competing GMs</span>" } else { "" },
+                    err = p.error.as_deref().map(|e| format!(" · error: {}", html_escape(e))).unwrap_or_default(),
+                    domains = domains,
+                ));
+            }
+            if let Some(d) = &dp.dscp {
+                let obs: String = d
+                    .observations
+                    .iter()
+                    .map(|o| {
+                        format!(
+                            "<tr><td>{kind}</td><td style=\"font-family:monospace\">{grp}</td><td>{n}</td><td>{med}</td><td>{exp}</td><td>{ttl_med} / {ttl_min}</td></tr>",
+                            kind = html_escape(&o.stream_kind),
+                            grp = html_escape(&o.dst_group),
+                            n = o.packets,
+                            med = o.dscp_median,
+                            exp = o.dscp_expected,
+                            ttl_med = o.ttl_median,
+                            ttl_min = o.ttl_min,
+                        )
+                    })
+                    .collect();
+                sections.push(format!(
+                    "<h3>DSCP / TTL audit ({secs}s on {iface})</h3><p>Verdict: <strong>{verdict}</strong>{err}</p><table><tr><th>Stream</th><th>Group</th><th>Pkts</th><th>DSCP median</th><th>Expected</th><th>TTL med/min</th></tr>{obs}</table>",
+                    iface = html_escape(&d.iface),
+                    secs = d.listen_secs,
+                    verdict = html_escape(&d.verdict),
+                    err = d.error.as_deref().map(|e| format!(" · error: {}", html_escape(e))).unwrap_or_default(),
+                    obs = obs,
+                ));
+            }
+            if let Some(l) = &dp.lldp {
+                let nb: String = l
+                    .neighbors
+                    .iter()
+                    .map(|n| {
+                        let caps = n.capabilities.iter().map(|c| html_escape(c)).collect::<Vec<_>>().join(", ");
+                        format!(
+                            "<tr><td>{via}</td><td style=\"font-family:monospace\">{mac}</td><td>{ip}</td><td>{name}</td><td>{port}</td><td>{vlan}</td><td>{vendor}</td><td>{caps}</td></tr>",
+                            via = html_escape(&n.via),
+                            mac = html_escape(&n.source_mac),
+                            ip = html_escape(n.source_ip.as_deref().unwrap_or("—")),
+                            name = html_escape(n.system_name.as_deref().unwrap_or("—")),
+                            port = html_escape(n.port_id.as_deref().unwrap_or("—")),
+                            vlan = n.vlan_id.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                            vendor = html_escape(n.oui_vendor.as_deref().unwrap_or("—")),
+                            caps = caps,
+                        )
+                    })
+                    .collect();
+                sections.push(format!(
+                    "<h3>LLDP / CDP / ARP ({secs}s on {iface}, via {mech})</h3><p>Verdict: <strong>{verdict}</strong>{err}</p><table><tr><th>Via</th><th>MAC</th><th>IP</th><th>System</th><th>Port</th><th>VLAN</th><th>Vendor</th><th>Capabilities</th></tr>{nb}</table>",
+                    iface = html_escape(&l.iface),
+                    secs = l.listen_secs,
+                    mech = html_escape(&l.mechanism),
+                    verdict = html_escape(&l.verdict),
+                    err = l.error.as_deref().map(|e| format!(" · error: {}", html_escape(e))).unwrap_or_default(),
+                    nb = nb,
+                ));
+            }
+            if let Some(la) = &dp.link_audit {
+                let issues = if la.issues.is_empty() {
+                    String::new()
+                } else {
+                    let items: String = la.issues.iter().map(|i| format!("<li>{}</li>", html_escape(i))).collect();
+                    format!("<p style=\"margin:4px 0\">Issues:</p><ul>{items}</ul>")
+                };
+                let rows = [
+                    ("Link speed", opt_fmt(&la.link_speed_mbps, |v| format!("{v} Mb/s"))),
+                    ("Duplex", opt_str(&la.duplex)),
+                    ("EEE enabled", opt_fmt(&la.eee_enabled, |v| if *v { "yes".into() } else { "no".into() })),
+                    ("Flow control RX", opt_fmt(&la.flow_control_rx, |v| if *v { "yes".into() } else { "no".into() })),
+                    ("Flow control TX", opt_fmt(&la.flow_control_tx, |v| if *v { "yes".into() } else { "no".into() })),
+                    ("MTU", opt_fmt(&la.mtu, |v| format!("{v} bytes"))),
+                ];
+                let body = dl_table(&rows);
+                sections.push(format!(
+                    "<h3>Link audit ({iface})</h3><p>Verdict: <strong>{verdict}</strong>{err}</p>{body}{issues}",
+                    iface = html_escape(&la.iface),
+                    verdict = html_escape(&la.verdict),
+                    err = la.error.as_deref().map(|e| format!(" · error: {}", html_escape(e))).unwrap_or_default(),
+                    body = body,
+                    issues = issues,
+                ));
+            }
+            if let Some(s) = &dp.sap {
+                let streams: String = s
+                    .streams
+                    .iter()
+                    .map(|st| {
+                        format!(
+                            "<tr><td>{name}</td><td>{origin}</td><td style=\"font-family:monospace\">{src}</td><td style=\"font-family:monospace\">{grp}</td><td>{port}</td><td>{sr}</td><td>{ch}</td><td>{pt}</td></tr>",
+                            name = html_escape(&st.session_name),
+                            origin = html_escape(&st.origin),
+                            src = html_escape(&st.source_ip),
+                            grp = html_escape(st.multicast_group.as_deref().unwrap_or("—")),
+                            port = st.port.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                            sr = st.sample_rate_hz.map(|v| format!("{v} Hz")).unwrap_or_else(|| "—".into()),
+                            ch = st.channels.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                            pt = st.ptime_ms.map(|v| format!("{v:.2} ms")).unwrap_or_else(|| "—".into()),
+                        )
+                    })
+                    .collect();
+                sections.push(format!(
+                    "<h3>SAP / SDP listen ({secs}s on {iface})</h3><p>Verdict: <strong>{verdict}</strong>{err}</p><table><tr><th>Session</th><th>Origin</th><th>Source IP</th><th>Group</th><th>Port</th><th>SR</th><th>Ch</th><th>ptime</th></tr>{streams}</table>",
+                    iface = html_escape(&s.iface),
+                    secs = s.listen_secs,
+                    verdict = html_escape(&s.verdict),
+                    err = s.error.as_deref().map(|e| format!(" · error: {}", html_escape(e))).unwrap_or_default(),
+                    streams = streams,
+                ));
+            }
+            if sections.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "<h2>Deep probes</h2><p style=\"color:#94a3b8\">Captured {ran}</p>{body}",
+                    ran = html_escape(&dp.ran_at),
+                    body = sections.join("")
+                )
+            }
+        }
+    };
+
+    // ── Stress tests ──────────────────────────────────────────────────────
+    let stress_html: String = if stress_results.is_empty() {
+        String::new()
+    } else {
+        let cards: String = stress_results
+            .iter()
+            .map(|s| {
+                let color = if s.success { "#34d399" } else { "#ef4444" };
+                let st = &s.stats;
+                let stats_row = format!(
+                    "attempts {a} · ok {ok} · fail {fail} · min {min} · avg {avg} · p95 {p95} · max {max} · jitter {jit} · loss {loss}",
+                    a = st.attempted,
+                    ok = st.succeeded,
+                    fail = st.failed,
+                    min = st.min_ms.map(|v| format!("{v:.1} ms")).unwrap_or_else(|| "—".into()),
+                    avg = st.avg_ms.map(|v| format!("{v:.1} ms")).unwrap_or_else(|| "—".into()),
+                    p95 = st.p95_ms.map(|v| format!("{v:.1} ms")).unwrap_or_else(|| "—".into()),
+                    max = st.max_ms.map(|v| format!("{v:.1} ms")).unwrap_or_else(|| "—".into()),
+                    jit = st.jitter_ms.map(|v| format!("{v:.1} ms")).unwrap_or_else(|| "—".into()),
+                    loss = st.loss_pct.map(|v| format!("{v:.1}%")).unwrap_or_else(|| "—".into()),
+                );
+                let details: String = s
+                    .details
+                    .iter()
+                    .map(|d| format!("<li>{}</li>", html_escape(d)))
+                    .collect();
+                format!(
+                    r#"<div style="border-left:4px solid {color};padding:8px 12px;margin:8px 0;background:#1a1a2e;border-radius:0 6px 6px 0">
+  <div style="display:flex;justify-content:space-between;gap:12px">
+    <strong>{label}</strong>
+    <span style="color:#64748b;font-family:monospace;font-size:11px">{kind} · {dur} ms · {ts}</span>
+  </div>
+  <p style="margin:6px 0 4px;color:#cbd5e1">{headline}</p>
+  <p style="margin:0 0 4px;color:#94a3b8;font-size:12px;font-family:monospace">{stats}</p>
+  <ul style="margin:0 0 0 18px;color:#cbd5e1">{details}</ul>
+</div>"#,
+                    color = color,
+                    label = html_escape(&s.label),
+                    kind = html_escape(&s.kind),
+                    dur = s.duration_ms,
+                    ts = s.started_at.format("%H:%M:%S"),
+                    headline = html_escape(&s.headline),
+                    stats = stats_row,
+                    details = details,
+                )
+            })
+            .collect();
+        format!("<h2>Active stress tests ({n})</h2>{cards}", n = stress_results.len())
+    };
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1070,7 +1873,31 @@ fn render_html_report(
 <h1>📡 WiFi Diagnostic Report</h1>
 <p>{portal}<strong>Scan:</strong> {started} → {finished}<br>
 <strong>SSID:</strong> {ssid} &nbsp; <strong>RSSI:</strong> {rssi} dBm &nbsp;
-<strong>Gateway latency:</strong> {gw_ms} &nbsp; <strong>Loss:</strong> {loss}</p>
+<strong>Gateway latency:</strong> {gw_ms} &nbsp; <strong>Loss:</strong> {loss}{badges}</p>
+
+{link}
+
+{reach}
+
+{extras}
+
+{wan}
+
+{quality}
+
+{phy}
+
+{interference}
+
+{alt}
+
+{roaming}
+
+{rogue}
+
+{nearby}
+
+{trends}
 
 {telemetry}
 
@@ -1083,9 +1910,15 @@ fn render_html_report(
 
 {wifi_events}
 
+{av}
+
+{deep}
+
+{stress}
+
 <h2>Devices ({n_devices})</h2>
 <table>
-<tr><th></th><th>MAC</th><th>Hostname</th><th>Class</th><th>Latency</th></tr>
+<tr><th></th><th>MAC</th><th>IP</th><th>Hostname</th><th>Class</th><th>Vendor</th><th>Latency</th><th>Services</th></tr>
 {devices}
 </table>
 
@@ -1114,6 +1947,31 @@ fn render_html_report(
             .packet_loss_pct
             .map(|v| format!("{v:.0}%"))
             .unwrap_or_else(|| "—".into()),
+        badges = {
+            let mut b = String::new();
+            if scan.dns_leak {
+                b.push_str(" &nbsp; <span style='background:#ef4444;color:#fff;padding:2px 8px;border-radius:4px'>⚠ DNS leak</span>");
+            }
+            if let Some(mtu) = scan.mtu_bytes {
+                b.push_str(&format!(" &nbsp; <span style='background:#1e293b;color:#cbd5e1;padding:2px 8px;border-radius:4px'>MTU {mtu}</span>"));
+            }
+            if let Some(spd) = scan.speed_mbps {
+                b.push_str(&format!(" &nbsp; <span style='background:#065f46;color:#a7f3d0;padding:2px 8px;border-radius:4px'>{spd:.0} Mb/s</span>"));
+            }
+            b
+        },
+        link = link_html,
+        reach = reach_html,
+        extras = extras_html,
+        wan = wan_html,
+        quality = quality_html,
+        phy = phy_html,
+        interference = interference_html,
+        alt = alt_html,
+        roaming = roaming_html,
+        rogue = rogue_html,
+        nearby = nearby_html,
+        trends = trends_html,
         telemetry = telemetry_html,
         narratives = narratives_html,
         n_findings = scan.findings.len(),
@@ -1124,6 +1982,9 @@ fn render_html_report(
             format!("<h2>Recommendations ({})</h2>{}", scan.recommendations.len(), recs_html)
         },
         wifi_events = wifi_events_html,
+        av = av_html,
+        deep = deep_html,
+        stress = stress_html,
         n_devices = scan.devices.len(),
         devices = devices_html,
         services = service_html,
@@ -1243,7 +2104,11 @@ pub async fn run_av_diagnostics(
     iface: Option<String>,
 ) -> Result<AvDiagnosticsResult, String> {
     let resolved = resolved_av_iface(&state, iface.as_deref());
-    Ok(crate::probes::av::collect(last_scan.as_ref(), resolved.as_deref()).await)
+    let result = crate::probes::av::collect(last_scan.as_ref(), resolved.as_deref()).await;
+    // Stash the result so `export_report` can include it without the
+    // frontend having to re-pass it on every call.
+    *state.last_av_diagnostics.lock() = Some(result.clone());
+    Ok(result)
 }
 
 /// List every network interface the host kernel currently exposes, so the
@@ -1443,6 +2308,28 @@ pub async fn run_deep_probes(
             }
         }
         other => return Err(format!("unsupported deep probe kind: {other}")),
+    }
+
+    // Merge `out` into the AppState cache so the printable report can
+    // include every probe the operator has ever run during this session.
+    // Each invocation typically populates exactly one of the optional
+    // fields; we keep prior fields untouched so a "sap-listen" run
+    // doesn't blow away an earlier "lldp-listen" result.
+    {
+        let mut guard = state.last_deep_probe.lock();
+        let merged = match guard.take() {
+            Some(prev) => DeepProbeResult {
+                ran_at: out.ran_at.clone(),
+                igmp: out.igmp.clone().or(prev.igmp),
+                ptp: out.ptp.clone().or(prev.ptp),
+                dscp: out.dscp.clone().or(prev.dscp),
+                lldp: out.lldp.clone().or(prev.lldp),
+                link_audit: out.link_audit.clone().or(prev.link_audit),
+                sap: out.sap.clone().or(prev.sap),
+            },
+            None => out.clone(),
+        };
+        *guard = Some(merged);
     }
 
     Ok(out)
