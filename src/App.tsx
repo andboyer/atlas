@@ -59,11 +59,25 @@ type TabId =
   | "tools"
   | "assistant";
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
+function SectionHeading({
+  children,
+  icon,
+}: {
+  children: React.ReactNode;
+  icon?: React.ReactNode;
+}) {
   return (
-    <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-      {children}
-    </h2>
+    <div className="mb-3 flex items-center gap-3">
+      <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">
+        {icon && (
+          <span className="text-[var(--color-accent)]" aria-hidden>
+            {icon}
+          </span>
+        )}
+        {children}
+      </h2>
+      <span className="atlas-section-rule" />
+    </div>
   );
 }
 
@@ -216,26 +230,28 @@ function App() {
     <div className="min-h-screen">
       <UpdateBanner />
       <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-bg)]/85 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-6 py-3">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-8 py-4">
           <div className="flex items-center gap-3">
-            <img
-              src="/atlas-mark.svg"
-              alt=""
-              className="h-9 w-9 select-none"
-              draggable={false}
-            />
-            <div>
-              <h1 className="text-sm font-semibold leading-tight tracking-[0.28em] text-[var(--color-accent)]">
+            <div className="atlas-brand-chip flex h-11 w-11 items-center justify-center rounded-xl">
+              <img
+                src="/atlas-mark.svg"
+                alt=""
+                className="h-9 w-9 select-none"
+                draggable={false}
+              />
+            </div>
+            <div className="leading-tight">
+              <h1 className="text-base font-semibold tracking-[0.32em] text-[var(--color-accent)]">
                 ATLAS
               </h1>
-              <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--color-muted)]">
+              <p className="text-[10px] uppercase tracking-[0.22em] text-[var(--color-muted)]">
                 Map your network
               </p>
             </div>
             {monitoring && (
-              <span className="ml-2 flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs text-emerald-300">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                monitoring
+              <span className="ml-3 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">
+                <span className="atlas-pulse h-1.5 w-1.5 rounded-full bg-emerald-400 text-emerald-400" />
+                Live
               </span>
             )}
           </div>
@@ -245,7 +261,7 @@ function App() {
               <button
                 onClick={handleExport}
                 disabled={exporting}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] px-3 py-1.5 text-xs text-[var(--color-muted)] transition-colors hover:text-[var(--color-text)] disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)]/80 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-text)] disabled:opacity-50"
                 title="Export HTML report"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -254,7 +270,7 @@ function App() {
             )}
             <button
               onClick={() => setShowSettings(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] px-3 py-1.5 text-xs text-[var(--color-muted)] transition-colors hover:text-[var(--color-text)]"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)]/80 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-text)]"
               title="Settings"
             >
               <SettingsIcon className="h-3.5 w-3.5" />
@@ -262,9 +278,10 @@ function App() {
             </button>
           </div>
         </div>
+        <div className="atlas-hairline" aria-hidden />
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-6">
+      <main className="mx-auto max-w-7xl px-8 py-8">
         {/* === Above-fold: alerts → identity → KPIs → tabs. Keep this short. === */}
         <div className="space-y-4">
           {lastScan?.captive_portal && (
@@ -306,7 +323,9 @@ function App() {
             {activeTab === "alerts" && (
               <>
                 <section>
-                  <SectionHeading>Findings &amp; recommendations</SectionHeading>
+                  <SectionHeading icon={<Bell className="h-3.5 w-3.5" />}>
+                    Findings &amp; recommendations
+                  </SectionHeading>
                   <FindingsList />
                 </section>
                 <NarrativePanel />
@@ -329,7 +348,9 @@ function App() {
                 )}
                 <WanPanel />
                 <section>
-                  <SectionHeading>Service reachability</SectionHeading>
+                  <SectionHeading icon={<Network className="h-3.5 w-3.5" />}>
+                    Service reachability
+                  </SectionHeading>
                   <ServiceStatus />
                 </section>
               </>
@@ -361,7 +382,9 @@ function App() {
 
             {activeTab === "devices" && (
               <section>
-                <SectionHeading>Devices on this network</SectionHeading>
+                <SectionHeading icon={<Cpu className="h-3.5 w-3.5" />}>
+                  Devices on this network
+                </SectionHeading>
                 <DeviceList />
               </section>
             )}
@@ -369,12 +392,16 @@ function App() {
             {activeTab === "activity" && (
               <>
                 <section>
-                  <SectionHeading>Scan history</SectionHeading>
+                  <SectionHeading icon={<History className="h-3.5 w-3.5" />}>
+                    Scan history
+                  </SectionHeading>
                   <IncidentTimeline />
                 </section>
                 <WifiEventsTimeline />
                 <section>
-                  <SectionHeading>Past scans</SectionHeading>
+                  <SectionHeading icon={<History className="h-3.5 w-3.5" />}>
+                    Past scans
+                  </SectionHeading>
                   <HistoryPanel />
                 </section>
               </>

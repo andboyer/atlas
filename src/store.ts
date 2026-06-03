@@ -337,7 +337,30 @@ export const useApp = create<AppState>((set, get) => ({
       );
       const current = get().avDiagnostics;
       if (current) {
-        set({ avDiagnostics: { ...current, deep_probe: deep } });
+        const prior = current.deep_probe ?? {
+          ran_at: deep.ran_at,
+          igmp: null,
+          ptp: null,
+          dscp: null,
+          lldp: null,
+          link_audit: null,
+          sap: null,
+        };
+        // Merge: keep prior fields, overlay any populated fields from
+        // this probe, always bump ran_at. The backend ships
+        // DeepProbeResult instances with one populated field per probe
+        // kind (or several when kind is "all"); merging lets us
+        // accumulate results across separate probe runs.
+        const merged: import("./types").DeepProbeResult = {
+          ran_at: deep.ran_at,
+          igmp: deep.igmp ?? prior.igmp,
+          ptp: deep.ptp ?? prior.ptp,
+          dscp: deep.dscp ?? prior.dscp,
+          lldp: deep.lldp ?? prior.lldp,
+          link_audit: deep.link_audit ?? prior.link_audit,
+          sap: deep.sap ?? prior.sap,
+        };
+        set({ avDiagnostics: { ...current, deep_probe: merged } });
       }
       set({ deepProbeRunning: false });
     } catch (e) {

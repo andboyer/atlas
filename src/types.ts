@@ -449,6 +449,136 @@ export interface IgmpProbeResult {
 export interface DeepProbeResult {
   ran_at: string;
   igmp: IgmpProbeResult | null;
+  ptp: PtpProbeResult | null;
+  dscp: DscpProbeResult | null;
+  lldp: LldpProbeResult | null;
+  link_audit: LinkAuditResult | null;
+  sap: SapProbeResult | null;
+}
+
+export interface PtpGrandmaster {
+  clock_identity: string;
+  priority1: number;
+  priority2: number;
+  clock_class: number;
+  clock_accuracy: number;
+  announces_seen: number;
+  source_ip: string;
+}
+
+export interface PtpDomain {
+  domain: number;
+  version: number;
+  log_announce_interval: number;
+  log_sync_interval: number;
+  /** "media" | "default" | "unknown". */
+  profile: string;
+  grandmasters: PtpGrandmaster[];
+  sync_jitter_us: number | null;
+  delay_mechanism: string;
+}
+
+export interface PtpProbeResult {
+  iface: string;
+  listen_secs: number;
+  domains: PtpDomain[];
+  total_announces: number;
+  total_syncs: number;
+  total_delays: number;
+  /** "stable_gm" | "multiple_gms" | "jittery_sync" | "no_ptp" | "silent" | "error". */
+  verdict: string;
+  error: string | null;
+}
+
+export interface DscpObservation {
+  /** "ptp_event" | "ptp_general" | "aes67_audio" | "dante_audio" | "other". */
+  stream_kind: string;
+  dst_group: string;
+  dst_port: number;
+  samples_seen: number;
+  /** Median DSCP (0-63) across samples. */
+  observed_dscp_median: number;
+  observed_ttl_median: number;
+  observed_ttl_min: number;
+  expected_dscp: number | null;
+  /** "preserved" | "stripped" | "downgraded" | "unknown". */
+  qos_status: string;
+}
+
+export interface DscpProbeResult {
+  iface: string;
+  listen_secs: number;
+  observations: DscpObservation[];
+  /** "qos_preserved" | "qos_stripped" | "qos_mixed" | "qos_unavailable_on_platform" | "silent" | "error". */
+  verdict: string;
+  error: string | null;
+}
+
+export interface LldpNeighbor {
+  source_mac: string;
+  source_ip: string | null;
+  /** "lldp" | "cdp" | "arp" | "ndp". */
+  via: string;
+  chassis_id: string | null;
+  port_id: string | null;
+  port_description: string | null;
+  system_name: string | null;
+  system_description: string | null;
+  vlan_id: number | null;
+  oui_vendor: string | null;
+  capabilities: string[];
+}
+
+export interface LldpProbeResult {
+  iface: string;
+  listen_secs: number;
+  neighbors: LldpNeighbor[];
+  /** "arp_oui_fallback" | "lldp_capture" | "cdp_capture". */
+  mechanism: string;
+  /** "switch_identified" | "neighbors_only" | "silent" | "not_supported" | "error". */
+  verdict: string;
+  error: string | null;
+}
+
+export interface LinkAuditResult {
+  iface: string;
+  /** Mbit/s. */
+  speed_mbps: number | null;
+  /** "full" | "half" | null. */
+  duplex: string | null;
+  mtu: number | null;
+  eee_enabled: boolean | null;
+  flow_control_rx: boolean | null;
+  flow_control_tx: boolean | null;
+  /** Issues like "Sub-gigabit link", "Half-duplex", "EEE enabled", "Flow-control on". */
+  issues: string[];
+  /** "ready_for_av" | "needs_attention" | "unknown" | "error". */
+  verdict: string;
+  error: string | null;
+}
+
+export interface SapStream {
+  origin: string;
+  session_name: string;
+  multicast_group: string;
+  port: number;
+  /** L24 / L16 / etc. */
+  payload_type: number;
+  sample_rate_hz: number | null;
+  channels: number | null;
+  ptime_ms: number | null;
+  ttl: number | null;
+  source_ip: string;
+}
+
+export interface SapProbeResult {
+  iface: string;
+  listen_secs: number;
+  streams: SapStream[];
+  announcements_seen: number;
+  /** "streams_found" | "silent" | "error". */
+  verdict: string;
+  error: string | null;
 }
 
 export interface AvDiagnosticsResult {

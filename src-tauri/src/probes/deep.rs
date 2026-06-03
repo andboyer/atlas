@@ -51,6 +51,8 @@ pub fn try_dispatch(args: &[String]) -> Option<i32> {
     let kind = args.get(probe_idx + 1)?;
     match kind.as_str() {
         "igmp-listen" => Some(run_igmp_listen(args)),
+        #[cfg(target_os = "windows")]
+        "dscp-audit" => Some(run_dscp_audit(args)),
         other => {
             eprintln!("unknown probe kind: {other}");
             Some(2)
@@ -61,6 +63,32 @@ pub fn try_dispatch(args: &[String]) -> Option<i32> {
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     let idx = args.iter().position(|a| a == key)?;
     args.get(idx + 1).cloned()
+}
+
+#[cfg(target_os = "windows")]
+fn run_dscp_audit(args: &[String]) -> i32 {
+    let iface = arg_value(args, "--iface").unwrap_or_default();
+    let listen_secs: u32 = arg_value(args, "--secs")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(12)
+        .clamp(1, 60);
+    let result = crate::probes::dscp::run_blocking(&iface, listen_secs);
+    let json = match serde_json::to_string(&result) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("serialise DscpProbeResult: {e}");
+            return 1;
+        }
+    };
+    if let Some(path) = arg_value(args, "--probe-out") {
+        if let Err(e) = std::fs::write(&path, &json) {
+            eprintln!("write probe output to {path}: {e}");
+            return 1;
+        }
+    } else {
+        println!("{json}");
+    }
+    0
 }
 
 fn run_igmp_listen(args: &[String]) -> i32 {

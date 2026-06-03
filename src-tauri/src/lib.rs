@@ -36,8 +36,16 @@ pub fn try_handle_probe_args(args: &[String]) -> Option<i32> {
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                // Default floor is INFO. The `mdns_sd::service_daemon` target
+                // is silenced because it emits ERROR-level "Failed to send to
+                // ff02::fb%<utun>:5353 ... ENOBUFS" thousands of times when
+                // the host has a VPN tunnel up — link-local IPv6 multicast
+                // through a utun interface fails by design and is not
+                // actionable. Re-enable via `RUST_LOG=mdns_sd=info` if you
+                // are debugging service discovery.
+                tracing_subscriber::EnvFilter::new("info,mdns_sd::service_daemon=off")
+            }),
         )
         .init();
 

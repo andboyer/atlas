@@ -1,19 +1,29 @@
 import { useEffect, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
   Cable,
+  Gauge,
   Lock,
+  Network,
+  Radio,
   RefreshCw,
   Signal,
   Wifi,
+  Zap,
 } from "lucide-react";
 import { useApp } from "../store";
 import { AvInsights } from "./AvInsights";
 import type {
   AvWarning,
   DanteDevice,
+  DscpProbeResult,
   InterfaceMulticast,
+  LinkAuditResult,
+  LldpProbeResult,
   MulticastGroup,
+  PtpProbeResult,
+  SapProbeResult,
 } from "../types";
 
 /**
@@ -52,10 +62,15 @@ export function AvDiagnostics() {
   return (
     <div className="space-y-6">
       {/* ── Header ── */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold">AV-over-IP diagnostics</h2>
-          <p className="mt-1 text-sm text-[var(--color-muted)]">
+      <div className="atlas-card flex flex-wrap items-end justify-between gap-4 p-5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-accent)]">
+            <Wifi className="h-3.5 w-3.5" /> AV / Multicast
+          </div>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight">
+            AV-over-IP diagnostics
+          </h2>
+          <p className="mt-1 text-sm leading-relaxed text-[var(--color-muted)]">
             Dante / AES67 discovery, multicast plumbing, PTP sync hints, and
             switch-side hazards — read from your host's view of the network.
           </p>
@@ -69,7 +84,7 @@ export function AvDiagnostics() {
           <button
             onClick={() => void load()}
             disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-3.5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-b from-[var(--color-accent)] to-[#b8893f] px-3.5 py-2 text-sm font-semibold text-[var(--atlas-navy,#0B1F3A)] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_14px_-8px_rgba(212,162,76,0.6)] transition-opacity hover:opacity-95 disabled:opacity-50"
           >
             <RefreshCw
               className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
@@ -426,7 +441,7 @@ function GroupRow({ group }: { group: MulticastGroup }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// Deep probes (privileged)
+// Deep probes (privileged + unprivileged)
 // ────────────────────────────────────────────────────────────────────────
 
 function DeepProbesCard({
@@ -440,46 +455,13 @@ function DeepProbesCard({
   error: string | null;
   onRun: (kind: string) => Promise<void>;
 }) {
-  const result = av?.deep_probe?.igmp ?? null;
-  const verdict = result?.verdict ?? null;
-
-  // Severity tint + human-readable headline per verdict.
-  const verdictStyle: Record<
-    string,
-    { label: string; tone: string; explain: string }
-  > = {
-    querier_present: {
-      label: "IGMP querier present",
-      tone: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-      explain:
-        "An IGMP querier is active on this subnet. Switches with IGMP snooping enabled will keep multicast streams (Dante audio, AES67, NDI) flowing without flooding every port.",
-    },
-    no_querier_observed: {
-      label: "Reports seen but NO querier",
-      tone: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-      explain:
-        "Other hosts are joining/leaving multicast groups but no querier is sending General Queries. IGMP-snooping switches will age out the groups in ~5 min and silently drop your audio. Fix: enable an IGMP querier on the L3 device, or disable snooping on the AV VLAN.",
-    },
-    silent: {
-      label: "No IGMP traffic observed",
-      tone: "border-sky-500/30 bg-sky-500/10 text-sky-200",
-      explain:
-        "Nothing on this interface emitted IGMP during the listen window. Likely causes: (a) no multicast subscribers active right now, (b) interface isolated on its own VLAN, or (c) Wi-Fi AP not bridging multicast. Try again with an active Dante session on the wire.",
-    },
-    error: {
-      label: "Probe failed",
-      tone: "border-rose-500/30 bg-rose-500/10 text-rose-200",
-      explain:
-        "The privileged listener could not open a raw socket or bind to the interface. Common causes: the auth prompt was cancelled, the interface name is wrong, or SIP is restricting raw sockets in this environment.",
-    },
-    not_implemented: {
-      label: "Scaffold response",
-      tone: "border-zinc-500/30 bg-zinc-500/10 text-zinc-200",
-      explain:
-        "This build returned a placeholder. Reinstall the latest app bundle to run the real listener.",
-    },
-  };
-  const meta = verdict ? verdictStyle[verdict] : null;
+  const deep = av?.deep_probe ?? null;
+  const igmp = deep?.igmp ?? null;
+  const ptp = deep?.ptp ?? null;
+  const dscp = deep?.dscp ?? null;
+  const lldp = deep?.lldp ?? null;
+  const linkAudit = deep?.link_audit ?? null;
+  const sap = deep?.sap ?? null;
 
   return (
     <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
@@ -487,22 +469,28 @@ function DeepProbesCard({
         <div>
           <h3 className="flex items-center gap-2 text-sm font-semibold">
             <Lock className="h-4 w-4" />
-            Deep probes (admin required)
+            Switch readiness probes
           </h3>
           <p className="mt-1 text-xs text-[var(--color-muted)]">
-            Listens for IGMP queriers on the wire — the #1 root cause of
-            “Dante devices appear but no audio flows.” macOS will prompt for
-            an administrator password.
+            Active listeners that diagnose the switch fabric behind your AV
+            traffic: IGMP queriers, PTP grandmasters, DSCP/TTL preservation,
+            neighbour identification, link-layer hygiene, and SAP/SDP stream
+            announcements. IGMP requires an admin password; the rest run
+            unprivileged.
           </p>
         </div>
-        <button
-          onClick={() => void onRun("igmp-listen")}
-          disabled={running}
-          className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] px-3.5 py-2 text-sm font-medium hover:bg-[var(--color-panel)] disabled:opacity-50"
-        >
-          <Lock className="h-4 w-4" />
-          {running ? "Listening…" : "Test IGMP querier"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => void onRun("all")}
+            disabled={running}
+            className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-3.5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <Activity
+              className={`h-4 w-4 ${running ? "animate-pulse" : ""}`}
+            />
+            {running ? "Probing…" : "Run full switch audit"}
+          </button>
+        </div>
       </header>
 
       {error && (
@@ -511,62 +499,706 @@ function DeepProbesCard({
         </div>
       )}
 
-      {result && (
-        <div className="mt-4 space-y-3">
-          <div
-            className={`rounded-lg border p-3 text-sm ${
-              meta?.tone ??
-              "border-[var(--color-border)] bg-[var(--color-panel-2)] text-[var(--color-fg)]"
-            }`}
-          >
-            <div className="font-semibold">
-              {meta?.label ?? `Verdict: ${result.verdict}`}
-            </div>
-            <p className="mt-1 text-[12px] leading-relaxed opacity-90">
-              {meta?.explain ??
-                "Unrecognised verdict — see raw JSON in the deep_probe payload."}
-            </p>
-            <div className="mt-2 text-[11px] opacity-80">
-              Listened on <code>{result.iface}</code> for {result.listen_secs}s
-              · {result.queriers_seen.length} querier(s),{" "}
-              {result.reports_seen} report(s), {result.leaves_seen} leave(s)
-            </div>
-            {result.error && (
-              <p className="mt-2 text-xs italic opacity-90">{result.error}</p>
-            )}
-          </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <IgmpProbePanel
+          result={igmp}
+          running={running}
+          onRun={() => void onRun("igmp-listen")}
+        />
+        <PtpProbePanel
+          result={ptp}
+          running={running}
+          onRun={() => void onRun("ptp-listen")}
+        />
+        <DscpProbePanel
+          result={dscp}
+          running={running}
+          onRun={() => void onRun("dscp-audit")}
+        />
+        <LldpProbePanel
+          result={lldp}
+          running={running}
+          onRun={() => void onRun("lldp-listen")}
+        />
+        <LinkAuditPanel
+          result={linkAudit}
+          running={running}
+          onRun={() => void onRun("link-audit")}
+        />
+        <SapProbePanel
+          result={sap}
+          running={running}
+          onRun={() => void onRun("sap-listen")}
+        />
+      </div>
+    </section>
+  );
+}
 
+// ────────────────────────────────────────────────────────────────────────
+// Per-probe panels
+// ────────────────────────────────────────────────────────────────────────
+
+function VerdictBadge({
+  tone,
+  label,
+}: {
+  tone: "good" | "warn" | "bad" | "info" | "unknown";
+  label: string;
+}) {
+  const cls =
+    tone === "good"
+      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+      : tone === "warn"
+        ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+        : tone === "bad"
+          ? "border-rose-500/40 bg-rose-500/10 text-rose-300"
+          : tone === "info"
+            ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
+            : "border-zinc-500/30 bg-zinc-500/10 text-zinc-300";
+  return (
+    <span
+      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${cls}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function ProbePanelShell({
+  icon,
+  title,
+  hint,
+  running,
+  onRun,
+  buttonLabel,
+  children,
+  badge,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  running: boolean;
+  onRun: () => void;
+  buttonLabel: string;
+  children: React.ReactNode;
+  badge?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-panel-2)] p-4">
+      <header className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--color-muted)]">{icon}</span>
+            <h4 className="text-sm font-semibold">{title}</h4>
+            {badge}
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-[var(--color-muted)]">
+            {hint}
+          </p>
+        </div>
+        <button
+          onClick={onRun}
+          disabled={running}
+          className="shrink-0 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] px-2.5 py-1 text-[11px] font-medium hover:bg-[var(--color-panel-2)] disabled:opacity-50"
+        >
+          {buttonLabel}
+        </button>
+      </header>
+      <div className="mt-3">{children}</div>
+    </div>
+  );
+}
+
+function IgmpProbePanel({
+  result,
+  running,
+  onRun,
+}: {
+  result: import("../types").IgmpProbeResult | null;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const verdict = result?.verdict ?? null;
+  const verdictMeta: Record<
+    string,
+    { label: string; tone: "good" | "warn" | "bad" | "info"; text: string }
+  > = {
+    querier_present: {
+      label: "Querier present",
+      tone: "good",
+      text: "An IGMP querier is active. Snooping switches will keep Dante/AES67/NDI streams flowing without flooding.",
+    },
+    no_querier_observed: {
+      label: "No querier",
+      tone: "warn",
+      text: "Reports/leaves observed but no General Query. Snooping switches will age out groups in ~5 min and silently drop audio.",
+    },
+    silent: {
+      label: "Silent",
+      tone: "info",
+      text: "No IGMP traffic during the listen window. Try again with an active Dante session on the wire.",
+    },
+    error: {
+      label: "Error",
+      tone: "bad",
+      text: "Privileged listener failed (auth cancelled, iface wrong, or raw-socket restriction).",
+    },
+    not_implemented: {
+      label: "Not implemented",
+      tone: "info",
+      text: "Scaffold response — reinstall to run the real listener.",
+    },
+  };
+  const meta = verdict ? verdictMeta[verdict] : null;
+
+  return (
+    <ProbePanelShell
+      icon={<Network className="h-4 w-4" />}
+      title="IGMP querier"
+      hint="Listens on UDP 224.0.0.1 for IGMP General Queries — the #1 cause of 'Dante devices appear but no audio flows'. Requires admin."
+      running={running}
+      onRun={onRun}
+      buttonLabel="Test"
+      badge={meta && <VerdictBadge tone={meta.tone} label={meta.label} />}
+    >
+      {!result ? (
+        <p className="text-xs text-[var(--color-muted)]">
+          Not run yet. Click <strong>Test</strong> to listen for ~12 s.
+        </p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          <div className="text-[11px] text-[var(--color-muted)]">
+            iface <code>{result.iface}</code> · {result.queriers_seen.length}{" "}
+            querier(s), {result.reports_seen} report(s),{" "}
+            {result.leaves_seen} leave(s)
+          </div>
           {result.queriers_seen.length > 0 && (
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel-2)] p-3">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-                Queriers detected
-              </div>
-              <div className="space-y-1.5">
-                {result.queriers_seen.map((q, i) => (
-                  <div
-                    key={`${q.from}-${q.group}-${i}`}
-                    className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs"
-                  >
-                    <code className="font-medium text-[var(--color-fg)]">
-                      {q.from}
-                    </code>
-                    <span className="text-[var(--color-muted)]">
-                      IGMPv{q.version}
-                    </span>
-                    <span className="text-[var(--color-muted)]">
-                      group <code>{q.group}</code>
-                    </span>
-                    <span className="text-[var(--color-muted)]">
-                      max-resp {(q.max_resp_ds / 10).toFixed(1)}s
-                    </span>
-                  </div>
-                ))}
-              </div>
+            <div className="space-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2">
+              {result.queriers_seen.map((q, i) => (
+                <div
+                  key={`${q.from}-${q.group}-${i}`}
+                  className="text-[11px]"
+                >
+                  <code>{q.from}</code> · v{q.version} · group{" "}
+                  <code>{q.group}</code> · max-resp{" "}
+                  {(q.max_resp_ds / 10).toFixed(1)}s
+                </div>
+              ))}
             </div>
+          )}
+          {result.error && (
+            <p className="text-[11px] italic text-rose-300">{result.error}</p>
           )}
         </div>
       )}
-    </section>
+    </ProbePanelShell>
+  );
+}
+
+function PtpProbePanel({
+  result,
+  running,
+  onRun,
+}: {
+  result: PtpProbeResult | null;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const verdictMeta: Record<
+    string,
+    { label: string; tone: "good" | "warn" | "bad" | "info"; text: string }
+  > = {
+    stable_gm: {
+      label: "Stable GM",
+      tone: "good",
+      text: "Exactly one grandmaster per domain — clean clocking for Dante / AES67.",
+    },
+    multiple_gms: {
+      label: "Competing GMs",
+      tone: "warn",
+      text: "Multiple grandmasters announcing on the same PTP domain. BMCA will pick one, but rogue GMs cause audio dropouts during failover.",
+    },
+    jittery_sync: {
+      label: "Jittery sync",
+      tone: "warn",
+      text: "Sync messages arrive with > 1 ms jitter. Likely a non-AV-capable switch in the path; expect audio artefacts.",
+    },
+    no_ptp: {
+      label: "No PTP",
+      tone: "info",
+      text: "No PTP traffic observed. AES67 / SMPTE 2110 need PTPv2; install / enable a grandmaster.",
+    },
+    silent: {
+      label: "Silent",
+      tone: "info",
+      text: "Nothing on the wire during the listen window.",
+    },
+    error: {
+      label: "Error",
+      tone: "bad",
+      text: "Listener failed to bind.",
+    },
+  };
+  const meta = result ? verdictMeta[result.verdict] : null;
+
+  return (
+    <ProbePanelShell
+      icon={<Activity className="h-4 w-4" />}
+      title="PTP grandmaster"
+      hint="Listens on UDP 319/320 for IEEE-1588 messages — identifies grandmasters, profile (media vs default), and sync jitter."
+      running={running}
+      onRun={onRun}
+      buttonLabel="Listen"
+      badge={meta && <VerdictBadge tone={meta.tone} label={meta.label} />}
+    >
+      {!result ? (
+        <p className="text-xs text-[var(--color-muted)]">Not run yet.</p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          <div className="text-[11px] text-[var(--color-muted)]">
+            {result.domains.length} domain(s) · {result.total_announces}{" "}
+            announce, {result.total_syncs} sync, {result.total_delays} delay
+          </div>
+          {result.domains.map((d) => (
+            <div
+              key={`${d.domain}-${d.version}`}
+              className="space-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2"
+            >
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="font-semibold">
+                  domain {d.domain} · v{d.version}
+                </span>
+                <span className="rounded bg-[var(--color-panel-2)] px-1.5 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+                  {d.profile}
+                </span>
+                {d.sync_jitter_us !== null && (
+                  <span className="text-[10px] text-[var(--color-muted)]">
+                    jitter ≈ {d.sync_jitter_us.toFixed(0)} µs
+                  </span>
+                )}
+              </div>
+              {d.grandmasters.map((gm) => (
+                <div
+                  key={gm.clock_identity}
+                  className="text-[11px] text-[var(--color-muted)]"
+                >
+                  <code>{gm.clock_identity}</code> · prio1 {gm.priority1} ·
+                  class {gm.clock_class} · from <code>{gm.source_ip}</code>
+                </div>
+              ))}
+            </div>
+          ))}
+          {result.error && (
+            <p className="text-[11px] italic text-rose-300">{result.error}</p>
+          )}
+        </div>
+      )}
+    </ProbePanelShell>
+  );
+}
+
+function DscpProbePanel({
+  result,
+  running,
+  onRun,
+}: {
+  result: DscpProbeResult | null;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const verdictMeta: Record<
+    string,
+    { label: string; tone: "good" | "warn" | "bad" | "info"; text: string }
+  > = {
+    qos_preserved: {
+      label: "QoS preserved",
+      tone: "good",
+      text: "DSCP markings arrived intact — switches are honouring AV priority.",
+    },
+    qos_stripped: {
+      label: "QoS stripped",
+      tone: "bad",
+      text: "All observed packets arrived with DSCP = 0. A switch or router on the path is rewriting markings; AV traffic will be best-effort.",
+    },
+    qos_mixed: {
+      label: "QoS mixed",
+      tone: "warn",
+      text: "Some streams kept their markings, others were stripped. Inspect per-stream below.",
+    },
+    qos_unavailable_on_platform: {
+      label: "Not on Windows v1",
+      tone: "info",
+      text: "Windows does not expose received IP_TOS via the standard recv path. This release ships full DSCP inspection on macOS & Linux only.",
+    },
+    silent: {
+      label: "Silent",
+      tone: "info",
+      text: "No PTP/AES67 packets reached the listener during the window.",
+    },
+    error: {
+      label: "Error",
+      tone: "bad",
+      text: "Listener failed.",
+    },
+  };
+  const meta = result ? verdictMeta[result.verdict] : null;
+
+  return (
+    <ProbePanelShell
+      icon={<Gauge className="h-4 w-4" />}
+      title="DSCP / TTL audit"
+      hint="Receives PTP and AES67 multicast and reads IP_TOS / TTL via cmsg — proves whether your switches rewrite QoS markings (the silent killer of AV audio)."
+      running={running}
+      onRun={onRun}
+      buttonLabel="Audit"
+      badge={meta && <VerdictBadge tone={meta.tone} label={meta.label} />}
+    >
+      {!result ? (
+        <p className="text-xs text-[var(--color-muted)]">Not run yet.</p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          {result.observations.length > 0 && (
+            <div className="space-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2">
+              {result.observations.map((o, i) => (
+                <div key={i} className="text-[11px]">
+                  <code>{o.stream_kind}</code> · grp {o.dst_group}:{o.dst_port}{" "}
+                  · DSCP {o.observed_dscp_median}
+                  {o.expected_dscp !== null && (
+                    <span className="text-[var(--color-muted)]">
+                      {" "}
+                      (expected {o.expected_dscp})
+                    </span>
+                  )}{" "}
+                  · TTL {o.observed_ttl_median} (min {o.observed_ttl_min}) ·{" "}
+                  <span
+                    className={
+                      o.qos_status === "preserved"
+                        ? "text-emerald-300"
+                        : o.qos_status === "stripped"
+                          ? "text-rose-300"
+                          : "text-amber-300"
+                    }
+                  >
+                    {o.qos_status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.error && (
+            <p className="text-[11px] italic text-rose-300">{result.error}</p>
+          )}
+        </div>
+      )}
+    </ProbePanelShell>
+  );
+}
+
+function LldpProbePanel({
+  result,
+  running,
+  onRun,
+}: {
+  result: LldpProbeResult | null;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const verdictMeta: Record<
+    string,
+    { label: string; tone: "good" | "warn" | "bad" | "info"; text: string }
+  > = {
+    switch_identified: {
+      label: "Switch identified",
+      tone: "good",
+      text: "An L2 neighbour with a switch-vendor OUI is on this subnet.",
+    },
+    neighbors_only: {
+      label: "Neighbours only",
+      tone: "info",
+      text: "Host neighbours found but no switch-vendor MAC. The upstream switch may not be ARP-visible from this host (typical for managed L3 hops).",
+    },
+    silent: {
+      label: "Silent",
+      tone: "info",
+      text: "No ARP entries reachable.",
+    },
+    not_supported: {
+      label: "Not supported",
+      tone: "info",
+      text: "ARP enumeration unavailable on this platform.",
+    },
+    error: {
+      label: "Error",
+      tone: "bad",
+      text: "Probe failed.",
+    },
+  };
+  const meta = result ? verdictMeta[result.verdict] : null;
+
+  return (
+    <ProbePanelShell
+      icon={<Radio className="h-4 w-4" />}
+      title="Neighbour ID (LLDP fallback)"
+      hint="Enumerates same-subnet neighbours via ARP and matches OUIs against switch-vendor lists. Real LLDP/CDP capture requires a raw-socket helper (planned)."
+      running={running}
+      onRun={onRun}
+      buttonLabel="Scan"
+      badge={meta && <VerdictBadge tone={meta.tone} label={meta.label} />}
+    >
+      {!result ? (
+        <p className="text-xs text-[var(--color-muted)]">Not run yet.</p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          <div className="text-[11px] text-[var(--color-muted)]">
+            {result.neighbors.length} neighbour(s) via{" "}
+            <code>{result.mechanism}</code>
+          </div>
+          {result.neighbors.length > 0 && (
+            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2">
+              {result.neighbors.map((n, i) => {
+                const isSwitch = n.capabilities.includes("inferred-switch");
+                return (
+                  <div key={`${n.source_mac}-${i}`} className="text-[11px]">
+                    <code>{n.source_mac}</code>{" "}
+                    {n.source_ip && (
+                      <span className="text-[var(--color-muted)]">
+                        ({n.source_ip})
+                      </span>
+                    )}{" "}
+                    ·{" "}
+                    <span
+                      className={
+                        isSwitch
+                          ? "font-medium text-emerald-300"
+                          : "text-[var(--color-muted)]"
+                      }
+                    >
+                      {n.oui_vendor ?? "unknown vendor"}
+                    </span>
+                    {isSwitch && <span className="ml-1">⇠ switch</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {result.error && (
+            <p className="text-[11px] italic text-rose-300">{result.error}</p>
+          )}
+        </div>
+      )}
+    </ProbePanelShell>
+  );
+}
+
+function LinkAuditPanel({
+  result,
+  running,
+  onRun,
+}: {
+  result: LinkAuditResult | null;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const verdictMeta: Record<
+    string,
+    { label: string; tone: "good" | "warn" | "bad" | "info"; text: string }
+  > = {
+    ready_for_av: {
+      label: "Ready",
+      tone: "good",
+      text: "Link looks clean for AV-over-IP: ≥ 1 Gb/s full-duplex with EEE & flow-control off.",
+    },
+    needs_attention: {
+      label: "Needs attention",
+      tone: "warn",
+      text: "Link has one or more AV-hostile settings — see issues below.",
+    },
+    unknown: {
+      label: "Unknown",
+      tone: "info",
+      text: "Could not determine link parameters. Driver may not expose them, or the iface name is wrong.",
+    },
+    error: {
+      label: "Error",
+      tone: "bad",
+      text: "Audit failed.",
+    },
+  };
+  const meta = result ? verdictMeta[result.verdict] : null;
+
+  return (
+    <ProbePanelShell
+      icon={<Zap className="h-4 w-4" />}
+      title="Link hygiene"
+      hint="Checks speed, duplex, MTU, Energy-Efficient Ethernet (EEE), and flow-control — EEE alone causes 50–100 ms packet stalls fatal to Dante."
+      running={running}
+      onRun={onRun}
+      buttonLabel="Audit"
+      badge={meta && <VerdictBadge tone={meta.tone} label={meta.label} />}
+    >
+      {!result ? (
+        <p className="text-xs text-[var(--color-muted)]">Not run yet.</p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2 text-[11px]">
+            <div>
+              speed:{" "}
+              <span className="font-medium">
+                {result.speed_mbps !== null
+                  ? `${result.speed_mbps} Mbps`
+                  : "—"}
+              </span>
+            </div>
+            <div>
+              duplex:{" "}
+              <span className="font-medium">{result.duplex ?? "—"}</span>
+            </div>
+            <div>
+              MTU: <span className="font-medium">{result.mtu ?? "—"}</span>
+            </div>
+            <div>
+              EEE:{" "}
+              <span
+                className={
+                  result.eee_enabled
+                    ? "font-medium text-amber-300"
+                    : "font-medium"
+                }
+              >
+                {result.eee_enabled === null
+                  ? "—"
+                  : result.eee_enabled
+                    ? "ON ⚠"
+                    : "off"}
+              </span>
+            </div>
+            <div>
+              flow-ctrl rx:{" "}
+              <span
+                className={
+                  result.flow_control_rx
+                    ? "font-medium text-amber-300"
+                    : "font-medium"
+                }
+              >
+                {result.flow_control_rx === null
+                  ? "—"
+                  : result.flow_control_rx
+                    ? "on ⚠"
+                    : "off"}
+              </span>
+            </div>
+            <div>
+              flow-ctrl tx:{" "}
+              <span
+                className={
+                  result.flow_control_tx
+                    ? "font-medium text-amber-300"
+                    : "font-medium"
+                }
+              >
+                {result.flow_control_tx === null
+                  ? "—"
+                  : result.flow_control_tx
+                    ? "on ⚠"
+                    : "off"}
+              </span>
+            </div>
+          </div>
+          {result.issues.length > 0 && (
+            <ul className="space-y-1 text-[11px] text-amber-300">
+              {result.issues.map((i, k) => (
+                <li key={k}>• {i}</li>
+              ))}
+            </ul>
+          )}
+          {result.error && (
+            <p className="text-[11px] italic text-rose-300">{result.error}</p>
+          )}
+        </div>
+      )}
+    </ProbePanelShell>
+  );
+}
+
+function SapProbePanel({
+  result,
+  running,
+  onRun,
+}: {
+  result: SapProbeResult | null;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const verdictMeta: Record<
+    string,
+    { label: string; tone: "good" | "warn" | "bad" | "info"; text: string }
+  > = {
+    streams_found: {
+      label: "Streams found",
+      tone: "good",
+      text: "AES67 / SAP / SDP announcements are flowing — receivers can auto-discover transmitters.",
+    },
+    silent: {
+      label: "Silent",
+      tone: "info",
+      text: "No SAP announcements observed. AES67 transmitters either aren't running or aren't bridging to this VLAN.",
+    },
+    error: {
+      label: "Error",
+      tone: "bad",
+      text: "Listener failed.",
+    },
+  };
+  const meta = result ? verdictMeta[result.verdict] : null;
+
+  return (
+    <ProbePanelShell
+      icon={<Signal className="h-4 w-4" />}
+      title="SAP / SDP discovery"
+      hint="Listens on 224.2.127.254:9875 for Session Announcement Protocol — discovers AES67 streams the way receivers do."
+      running={running}
+      onRun={onRun}
+      buttonLabel="Listen"
+      badge={meta && <VerdictBadge tone={meta.tone} label={meta.label} />}
+    >
+      {!result ? (
+        <p className="text-xs text-[var(--color-muted)]">Not run yet.</p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          <div className="text-[11px] text-[var(--color-muted)]">
+            {result.announcements_seen} announcement(s) ·{" "}
+            {result.streams.length} unique stream(s)
+          </div>
+          {result.streams.length > 0 && (
+            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2">
+              {result.streams.map((s, i) => (
+                <div key={i} className="text-[11px]">
+                  <span className="font-medium">{s.session_name}</span> ·{" "}
+                  <code>
+                    {s.multicast_group}:{s.port}
+                  </code>{" "}
+                  · L{s.payload_type}
+                  {s.sample_rate_hz && ` @ ${s.sample_rate_hz / 1000} kHz`}
+                  {s.channels && ` × ${s.channels}ch`}
+                  {s.ptime_ms !== null && ` · ${s.ptime_ms} ms`}
+                </div>
+              ))}
+            </div>
+          )}
+          {result.error && (
+            <p className="text-[11px] italic text-rose-300">{result.error}</p>
+          )}
+        </div>
+      )}
+    </ProbePanelShell>
   );
 }
 

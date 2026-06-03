@@ -47,13 +47,13 @@ const PANELS: PanelDef[] = [
     label: "Signal strength",
     sublabel: "RSSI from the access point",
     unit: "dBm",
-    color: "#818cf8",
+    color: "#3FB8C9", // atlas meridian
     fillId: "fill-rssi",
     lowerIsBetter: false,
     thresholds: { warn: -70, bad: -80 },
     yDomain: [-90, -30],
     Icon: Activity,
-    iconGradient: "from-indigo-500 to-blue-600",
+    iconGradient: "from-[#3FB8C9] to-[#1E5BBF]",
     format: (v) => `${Math.round(v)} dBm`,
   },
   {
@@ -66,7 +66,7 @@ const PANELS: PanelDef[] = [
     lowerIsBetter: true,
     thresholds: { warn: 30, bad: 80 },
     Icon: RouterIcon,
-    iconGradient: "from-emerald-500 to-teal-600",
+    iconGradient: "from-emerald-400 to-emerald-700",
     format: (v) => `${v.toFixed(v < 10 ? 1 : 0)} ms`,
   },
   {
@@ -74,12 +74,12 @@ const PANELS: PanelDef[] = [
     label: "Internet latency",
     sublabel: "Round-trip to 1.1.1.1",
     unit: "ms",
-    color: "#fbbf24",
+    color: "#D4A24C", // atlas brass
     fillId: "fill-inet",
     lowerIsBetter: true,
     thresholds: { warn: 60, bad: 120 },
     Icon: Globe2,
-    iconGradient: "from-amber-500 to-orange-600",
+    iconGradient: "from-[#D4A24C] to-[#8a6a2f]",
     format: (v) => `${v.toFixed(v < 10 ? 1 : 0)} ms`,
   },
   {
@@ -92,7 +92,7 @@ const PANELS: PanelDef[] = [
     lowerIsBetter: true,
     thresholds: { warn: 40, bad: 100 },
     Icon: Server,
-    iconGradient: "from-pink-500 to-rose-600",
+    iconGradient: "from-pink-400 to-rose-700",
     format: (v) => `${v.toFixed(v < 10 ? 1 : 0)} ms`,
   },
 ];

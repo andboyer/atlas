@@ -79,7 +79,7 @@ export function NetworkPathPanel({
   ];
 
   return (
-    <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
+    <div className="atlas-card p-5">
       <div className="mb-1 flex items-center gap-2 text-sm font-semibold">
         <Globe className="h-4 w-4 text-[var(--color-accent)]" />
         Network path

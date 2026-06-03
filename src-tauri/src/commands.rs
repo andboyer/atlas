@@ -1291,25 +1291,170 @@ pub async fn run_deep_probes(
     kind: String,
     iface: Option<String>,
 ) -> Result<DeepProbeResult, String> {
-    if kind != "igmp-listen" {
-        return Err(format!("unsupported deep probe kind: {kind}"));
-    }
+    let iface = resolved_av_iface(&state, iface.as_deref()).unwrap_or_else(|| "en0".to_string());
     let exe = std::env::current_exe()
         .map_err(|e| format!("locate current exe: {e}"))?
         .to_string_lossy()
         .to_string();
-    let iface = resolved_av_iface(&state, iface.as_deref()).unwrap_or_else(|| "en0".to_string());
-    let json = elevate_and_run_igmp(&exe, &iface).await?;
-    let igmp: IgmpProbeResult = serde_json::from_str(json.trim())
-        .map_err(|e| format!("parse IgmpProbeResult: {e}; raw={json:?}"))?;
-    Ok(DeepProbeResult {
-        ran_at: chrono::Utc::now().to_rfc3339(),
-        igmp: Some(igmp),
-    })
+    let ran_at = chrono::Utc::now().to_rfc3339();
+    let mut out = DeepProbeResult {
+        ran_at: ran_at.clone(),
+        ..Default::default()
+    };
+
+    match kind.as_str() {
+        "igmp-listen" => {
+            let json = elevate_and_run_probe(&exe, "igmp-listen", &iface, 12).await?;
+            let igmp: IgmpProbeResult = serde_json::from_str(json.trim())
+                .map_err(|e| format!("parse IgmpProbeResult: {e}; raw={json:?}"))?;
+            out.igmp = Some(igmp);
+        }
+        "ptp-listen" => {
+            let i = iface.clone();
+            let ptp = tokio::task::spawn_blocking(move || {
+                crate::probes::ptp::run_blocking(&i, 12)
+            })
+            .await
+            .map_err(|e| format!("ptp join: {e}"))?;
+            out.ptp = Some(ptp);
+        }
+        "dscp-audit" => {
+            #[cfg(unix)]
+            {
+                let i = iface.clone();
+                let dscp = tokio::task::spawn_blocking(move || {
+                    crate::probes::dscp::run_blocking(&i, 12)
+                })
+                .await
+                .map_err(|e| format!("dscp join: {e}"))?;
+                out.dscp = Some(dscp);
+            }
+            #[cfg(windows)]
+            {
+                let json = elevate_and_run_probe(&exe, "dscp-audit", &iface, 12).await?;
+                let dscp: crate::types::DscpProbeResult = serde_json::from_str(json.trim())
+                    .map_err(|e| format!("parse DscpProbeResult: {e}; raw={json:?}"))?;
+                out.dscp = Some(dscp);
+            }
+        }
+        "lldp-listen" => {
+            // ARP+OUI fallback runs unprivileged on every platform.
+            let i = iface.clone();
+            let lldp = tokio::task::spawn_blocking(move || {
+                crate::probes::lldp::run_blocking(&i, 12)
+            })
+            .await
+            .map_err(|e| format!("lldp join: {e}"))?;
+            out.lldp = Some(lldp);
+        }
+        "link-audit" => {
+            let i = iface.clone();
+            let link = tokio::task::spawn_blocking(move || {
+                crate::probes::linkaudit::run_blocking(&i)
+            })
+            .await
+            .map_err(|e| format!("linkaudit join: {e}"))?;
+            out.link_audit = Some(link);
+        }
+        "sap-listen" => {
+            let i = iface.clone();
+            let sap = tokio::task::spawn_blocking(move || {
+                crate::probes::sap::run_blocking(&i, 8)
+            })
+            .await
+            .map_err(|e| format!("sap join: {e}"))?;
+            out.sap = Some(sap);
+        }
+        "all" => {
+            // Spawn every unprivileged probe in parallel and combine
+            // all privileged probes into a single elevated dispatch so
+            // the operator sees at most ONE auth prompt.
+            let i = iface.clone();
+            let ptp_h = tokio::task::spawn_blocking(move || {
+                crate::probes::ptp::run_blocking(&i, 12)
+            });
+            let i = iface.clone();
+            let sap_h = tokio::task::spawn_blocking(move || {
+                crate::probes::sap::run_blocking(&i, 8)
+            });
+            let i = iface.clone();
+            let link_h = tokio::task::spawn_blocking(move || {
+                crate::probes::linkaudit::run_blocking(&i)
+            });
+            let i = iface.clone();
+            let lldp_h = tokio::task::spawn_blocking(move || {
+                crate::probes::lldp::run_blocking(&i, 12)
+            });
+            #[cfg(unix)]
+            let dscp_h = {
+                let i = iface.clone();
+                Some(tokio::task::spawn_blocking(move || {
+                    crate::probes::dscp::run_blocking(&i, 12)
+                }))
+            };
+            #[cfg(windows)]
+            let dscp_h: Option<tokio::task::JoinHandle<crate::types::DscpProbeResult>> = None;
+
+            // Single elevated dispatch covering everything that needs root.
+            // On Unix that's just IGMP. On Windows we'd also bundle DSCP
+            // here, but for v1 DSCP on Windows runs separately as part
+            // of its own kind invocation if requested. The `all` mode
+            // here therefore only elevates for IGMP.
+            let igmp_fut = elevate_and_run_probe(&exe, "igmp-listen", &iface, 12);
+
+            let (ptp_r, sap_r, link_r, lldp_r, igmp_json) =
+                tokio::join!(ptp_h, sap_h, link_h, lldp_h, igmp_fut);
+
+            out.ptp = ptp_r.ok();
+            out.sap = sap_r.ok();
+            out.link_audit = link_r.ok();
+            out.lldp = lldp_r.ok();
+            match igmp_json {
+                Ok(json) => match serde_json::from_str::<IgmpProbeResult>(json.trim()) {
+                    Ok(v) => out.igmp = Some(v),
+                    Err(e) => {
+                        out.igmp = Some(IgmpProbeResult {
+                            iface: iface.clone(),
+                            listen_secs: 12,
+                            queriers_seen: Vec::new(),
+                            reports_seen: 0,
+                            leaves_seen: 0,
+                            verdict: "error".to_string(),
+                            error: Some(format!("parse IgmpProbeResult: {e}")),
+                        });
+                    }
+                },
+                Err(e) => {
+                    out.igmp = Some(IgmpProbeResult {
+                        iface: iface.clone(),
+                        listen_secs: 12,
+                        queriers_seen: Vec::new(),
+                        reports_seen: 0,
+                        leaves_seen: 0,
+                        verdict: "error".to_string(),
+                        error: Some(e),
+                    });
+                }
+            }
+            if let Some(h) = dscp_h {
+                if let Ok(d) = h.await {
+                    out.dscp = Some(d);
+                }
+            }
+        }
+        other => return Err(format!("unsupported deep probe kind: {other}")),
+    }
+
+    Ok(out)
 }
 
 #[cfg(target_os = "macos")]
-async fn elevate_and_run_igmp(exe: &str, iface: &str) -> Result<String, String> {
+async fn elevate_and_run_probe(
+    exe: &str,
+    probe_kind: &str,
+    iface: &str,
+    secs: u32,
+) -> Result<String, String> {
     // Quote the binary path for osascript's nested shell; backslash-escape
     // any embedded quotes.
     let escaped = exe.replace('\\', "\\\\").replace('"', "\\\"");
@@ -1322,7 +1467,15 @@ async fn elevate_and_run_igmp(exe: &str, iface: &str) -> Result<String, String> 
     {
         return Err(format!("invalid interface name: {iface}"));
     }
-    let shell_cmd = format!("\"{escaped}\" --probe igmp-listen --iface {iface} --secs 12");
+    if !probe_kind
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("invalid probe kind: {probe_kind}"));
+    }
+    let shell_cmd = format!(
+        "\"{escaped}\" --probe {probe_kind} --iface {iface} --secs {secs}"
+    );
     let apple_script = format!(
         "do shell script \"{}\" with administrator privileges",
         shell_cmd.replace('\\', "\\\\").replace('"', "\\\"")
@@ -1348,7 +1501,12 @@ async fn elevate_and_run_igmp(exe: &str, iface: &str) -> Result<String, String> 
 }
 
 #[cfg(target_os = "windows")]
-async fn elevate_and_run_igmp(exe: &str, iface: &str) -> Result<String, String> {
+async fn elevate_and_run_probe(
+    exe: &str,
+    probe_kind: &str,
+    iface: &str,
+    secs: u32,
+) -> Result<String, String> {
     // Stdout can't cross an elevation boundary in Win32, so route the
     // helper's JSON through a unique temp file we read after -Wait.
     let out_path = std::env::temp_dir().join(format!(
@@ -1357,13 +1515,14 @@ async fn elevate_and_run_igmp(exe: &str, iface: &str) -> Result<String, String> 
     ));
     let out_path_str = out_path.to_string_lossy().into_owned();
     let ps_quote = |s: &str| s.replace('\'', "''");
+    let secs_str = secs.to_string();
     let arg_list = [
         "--probe",
-        "igmp-listen",
+        probe_kind,
         "--iface",
         iface,
         "--secs",
-        "12",
+        &secs_str,
         "--probe-out",
         &out_path_str,
     ]
@@ -1414,7 +1573,12 @@ async fn elevate_and_run_igmp(exe: &str, iface: &str) -> Result<String, String> 
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-async fn elevate_and_run_igmp(_exe: &str, _iface: &str) -> Result<String, String> {
+async fn elevate_and_run_probe(
+    _exe: &str,
+    _probe_kind: &str,
+    _iface: &str,
+    _secs: u32,
+) -> Result<String, String> {
     Err("Privileged probes are only wired for macOS and Windows in this release.".into())
 }
 

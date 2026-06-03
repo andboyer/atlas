@@ -11,6 +11,7 @@
   --color-panel-2: #1E3A6A;     /* atlas mid hi — hovered / focused card */
   --color-border: #2A4A7F;      /* atlas hairline */
   --color-text: #F5EFE0;        /* atlas parchment — primary type */
+  --color-fg: #F5EFE0;          /* alias of --color-text for legacy refs */
   --color-muted: #94A3C4;       /* atlas mist — secondary type */
   --color-accent: #D4A24C;      /* atlas brass — primary action + brand */
   --color-accent-2: #3FB8C9;    /* atlas meridian — secondary accent */
@@ -47,4 +48,130 @@ body {
 .tabular {
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
+}
+
+/* ── Atlas global selection / focus / scrollbar tokens ─────────────────
+ * Keeps the parchment-on-navy palette consistent across every native
+ * affordance the OS would otherwise theme with its own colours.
+ */
+::selection {
+  background: rgba(212, 162, 76, 0.35); /* brass @ 35% */
+  color: var(--color-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* WebKit (Tauri runs WKWebView on macOS) custom scrollbar — keeps the
+ * dashboard feeling like a single instrument instead of a stock browser
+ * window. Falls back to native behaviour on Firefox / Linux. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 196, 0.22); /* atlas mist @ 22% */
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 162, 76, 0.45); /* brass hover */
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* ── Shared card surface ─────────────────────────────────────────────
+ * Use `.atlas-card` for any rounded-2xl panel. It carries the canonical
+ * border + background + subtle inner highlight + hover lift so card
+ * styling stays consistent without 36 components hand-rolling Tailwind.
+ */
+.atlas-card {
+  position: relative;
+  border-radius: 1rem; /* matches rounded-2xl */
+  background: linear-gradient(
+    180deg,
+    rgba(30, 58, 106, 0.55) 0%,
+    rgba(22, 49, 92, 0.85) 100%
+  );
+  border: 1px solid var(--color-border);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 239, 224, 0.04),
+    0 1px 0 rgba(0, 0, 0, 0.2),
+    0 12px 32px -16px rgba(11, 31, 58, 0.55);
+}
+
+.atlas-card-hover {
+  transition: transform 120ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+.atlas-card-hover:hover {
+  border-color: rgba(212, 162, 76, 0.4);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 239, 224, 0.06),
+    0 1px 0 rgba(0, 0, 0, 0.2),
+    0 18px 40px -18px rgba(11, 31, 58, 0.7);
+}
+
+/* Brass hairline used under the sticky header and above the footer to
+ * frame the working surface. */
+.atlas-hairline {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(212, 162, 76, 0.5) 18%,
+    rgba(63, 184, 201, 0.4) 50%,
+    rgba(212, 162, 76, 0.5) 82%,
+    transparent 100%
+  );
+}
+
+/* Soft brand ambience behind the header chip + hero tiles. */
+.atlas-brand-chip {
+  background:
+    radial-gradient(120% 120% at 30% 0%, rgba(63, 184, 201, 0.25) 0%, transparent 60%),
+    linear-gradient(135deg, #1e5bbf 0%, #0b1f3a 100%);
+  border: 1px solid rgba(212, 162, 76, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 239, 224, 0.12),
+    0 6px 18px -10px rgba(11, 31, 58, 0.8);
+}
+
+/* Pill-bar background for Tabs.tsx. */
+.atlas-tabbar {
+  background: linear-gradient(
+    180deg,
+    rgba(16, 39, 71, 0.6) 0%,
+    rgba(16, 39, 71, 0.3) 100%
+  );
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 4px;
+  backdrop-filter: blur(6px);
+}
+
+/* Pulse dot used in the monitoring + live chips. */
+@keyframes atlas-pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+  50%      { opacity: 0.6; box-shadow: 0 0 0 5px transparent; }
+}
+.atlas-pulse {
+  animation: atlas-pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* Subtle section heading divider used by SectionHeading. */
+.atlas-section-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(42, 74, 127, 0.6) 0%,
+    transparent 100%
+  );
 }

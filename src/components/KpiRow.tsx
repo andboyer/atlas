@@ -33,7 +33,7 @@ export function KpiRow() {
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       <KpiTile
-        icon={<Signal className="h-3.5 w-3.5" />}
+        icon={<Signal className="h-4 w-4" />}
         label="Signal"
         value={link.rssi_dbm != null ? `${link.rssi_dbm} dBm` : "—"}
         sublabel={
@@ -42,7 +42,7 @@ export function KpiRow() {
         tone={signalTone(link.rssi_dbm)}
       />
       <KpiTile
-        icon={<Gauge className="h-3.5 w-3.5" />}
+        icon={<Gauge className="h-4 w-4" />}
         label="Download"
         value={
           scan.speed_mbps != null ? `${scan.speed_mbps.toFixed(0)} Mbps` : "—"
@@ -55,7 +55,7 @@ export function KpiRow() {
         tone={speedTone(scan.speed_mbps)}
       />
       <KpiTile
-        icon={<Activity className="h-3.5 w-3.5" />}
+        icon={<Activity className="h-4 w-4" />}
         label="Internet latency"
         value={
           reach.internet_latency_ms != null
@@ -70,7 +70,7 @@ export function KpiRow() {
         tone={latencyTone(reach.internet_latency_ms)}
       />
       <KpiTile
-        icon={<Cpu className="h-3.5 w-3.5" />}
+        icon={<Cpu className="h-4 w-4" />}
         label="Devices"
         value={`${onlineDevices} / ${scan.devices.length}`}
         sublabel="online / known"

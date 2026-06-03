@@ -547,13 +547,22 @@ pub struct AvWarning {
     pub message: String,
 }
 
-/// Wrapper for results from any privileged probe (IGMP querier listen,
-/// active PTP, pcap). All fields are optional because each probe is
-/// independently opt-in and runs via `osascript … administrator privileges`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Wrapper for results from any deep probe — privileged (IGMP querier
+/// listen, DSCP audit, LLDP) or unprivileged (active PTP sampler, link
+/// audit, SAP/SDP listener). All fields are optional because each probe
+/// is independently opt-in. The privileged probes run via a re-exec of
+/// the current binary under `osascript … administrator privileges`
+/// (macOS) or `Start-Process -Verb RunAs` (Windows). The unprivileged
+/// probes run in-process via `spawn_blocking`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeepProbeResult {
     pub ran_at: String,
     pub igmp: Option<IgmpProbeResult>,
+    pub ptp: Option<PtpProbeResult>,
+    pub dscp: Option<DscpProbeResult>,
+    pub lldp: Option<LldpProbeResult>,
+    pub link_audit: Option<LinkAuditResult>,
+    pub sap: Option<SapProbeResult>,
 }
 
 /// Result of a passive listen on a raw IGMP socket. We listen rather than
@@ -577,6 +586,184 @@ pub struct IgmpQuerier {
     /// Max Response Time, deci-seconds (IGMPv2/v3 field).
     pub max_resp_ds: u32,
     pub group: String,
+}
+
+/// Result of the PTP active sampler. Joins the PTPv1 / PTPv2 multicast
+/// groups on UDP 319 (event) and 320 (general) and parses Announce +
+/// Sync messages to identify grandmasters, sync interval, and arrival
+/// jitter. Unprivileged on every platform.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtpProbeResult {
+    pub iface: String,
+    pub listen_secs: u32,
+    pub domains: Vec<PtpDomain>,
+    pub grandmaster_count: u32,
+    /// True if more than one grandmaster announced in the same domain
+    /// during the listen window. Indicates an election storm — audio
+    /// will glitch on every BMCA reshuffle.
+    pub competing_gm_observed: bool,
+    /// `"stable_gm"` | `"no_ptp"` | `"multiple_gms"` | `"jittery_sync"`
+    /// | `"silent"` | `"error"`.
+    pub verdict: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtpDomain {
+    pub domain_number: u8,
+    /// PTP version: 1 (IEEE 1588-2002) or 2 (IEEE 1588-2008).
+    pub version: u8,
+    /// `"default"` | `"media"` (SMPTE 2059-2 / AES67) | `"unknown"`.
+    pub profile: String,
+    pub grandmasters: Vec<PtpGrandmaster>,
+    /// log2(announce interval seconds); typical values: 1 (2s, default)
+    /// or -2 (250ms, media profile).
+    pub announce_interval_log2: i8,
+    /// log2(sync interval seconds); typical: 0 (1s) default, -3 (125ms) media.
+    pub sync_interval_log2: i8,
+    /// Total Sync messages observed during the listen window.
+    pub sync_arrivals: u32,
+    /// Stddev of inter-Sync arrival times in microseconds (only meaningful
+    /// when sync_arrivals >= 3). Lower is better; >1000µs is a smoking
+    /// gun for switch QoS issues.
+    pub sync_jitter_us: Option<f32>,
+    /// `"ipv4_multicast"` | `"ipv4_unicast"` | `"l2"`.
+    pub transport: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtpGrandmaster {
+    /// 8-byte EUI-64 clockIdentity, e.g. `"00:1d:c1:ff:fe:08:00:42"`.
+    pub clock_identity: String,
+    pub priority1: u8,
+    pub priority2: u8,
+    /// PTP clockClass: 6 = locked PRC, 7 = holdover, 187 = arb time scale,
+    /// 248 = default, 255 = slave-only.
+    pub clock_class: u8,
+    pub clock_accuracy: u8,
+    pub announces_seen: u32,
+    pub source_ip: String,
+}
+
+/// Result of the DSCP / TTL audit probe. Opens a raw IPv4 socket
+/// (privileged on all platforms) and reads the TOS + TTL byte from
+/// every inbound PTP / Dante audio / AES67 audio packet, then reports
+/// the median DSCP and TTL per stream class. The single most direct
+/// way to verify "the switch is honouring QoS".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DscpProbeResult {
+    pub iface: String,
+    pub listen_secs: u32,
+    pub observations: Vec<DscpObservation>,
+    /// `"qos_preserved"` | `"qos_stripped"` | `"qos_mixed"` | `"silent"`
+    /// | `"error"`.
+    pub verdict: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DscpObservation {
+    /// `"ptp_event"` | `"ptp_general"` | `"dante_audio"` | `"aes67_audio"`
+    /// | `"rtp_other"`.
+    pub stream_kind: String,
+    pub dst_group: String,
+    pub packets: u32,
+    /// Observed median DSCP value (0..63). Should be 56 (CS7) for PTP,
+    /// 46 (EF) for Dante audio, 34 (AF41) or 46 for AES67.
+    pub dscp_median: u8,
+    pub dscp_expected: u8,
+    pub ttl_median: u8,
+    pub ttl_min: u8,
+}
+
+/// Result of the LLDP / CDP listener (or ARP fallback). Identifies the
+/// upstream switch model, port, VLAN, and capabilities. Critical for
+/// pinpointing "which port am I plugged into".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LldpProbeResult {
+    pub iface: String,
+    pub listen_secs: u32,
+    pub neighbors: Vec<LldpNeighbor>,
+    /// `"l2_capture"` (BPF/AF_PACKET; full LLDP/CDP TLV parse) |
+    /// `"arp_oui_fallback"` (Windows: ARP + OUI lookup; no LLDP TLVs) |
+    /// `"none"`.
+    pub mechanism: String,
+    /// `"switch_identified"` | `"neighbors_only"` | `"silent"`
+    /// | `"not_supported"` | `"error"`.
+    pub verdict: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LldpNeighbor {
+    pub source_mac: String,
+    pub source_ip: Option<String>,
+    /// `"lldp"` | `"cdp"` | `"arp"`.
+    pub via: String,
+    pub chassis_id: Option<String>,
+    pub port_id: Option<String>,
+    pub port_description: Option<String>,
+    pub system_name: Option<String>,
+    pub system_description: Option<String>,
+    pub vlan_id: Option<u16>,
+    pub oui_vendor: Option<String>,
+    /// LLDP system capabilities subset: `"bridge"`, `"router"`,
+    /// `"wlan"`, `"phone"`, `"docsis"`, `"station"`, `"stp"`, `"other"`.
+    pub capabilities: Vec<String>,
+}
+
+/// Result of the per-NIC link audit (EEE / flow-control / duplex / speed
+/// / MTU). Read via OS-specific APIs:
+///   - macOS: `ifconfig <iface>` for media, `system_profiler SPNetworkDataType`
+///     for full duplex / MTU. EEE state isn't always queryable.
+///   - Linux: `ethtool <iface>` + `ethtool --show-eee <iface>`.
+///   - Windows: `Get-NetAdapter` + `Get-NetAdapterAdvancedProperty`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkAuditResult {
+    pub iface: String,
+    pub link_speed_mbps: Option<u32>,
+    /// `"full"` | `"half"` | `"unknown"`.
+    pub duplex: Option<String>,
+    /// `None` when this platform doesn't expose EEE state on the NIC.
+    pub eee_enabled: Option<bool>,
+    pub flow_control_rx: Option<bool>,
+    pub flow_control_tx: Option<bool>,
+    pub mtu: Option<u32>,
+    /// `"ready_for_av"` | `"needs_attention"` | `"unknown"` | `"error"`.
+    pub verdict: String,
+    /// Human-readable list of specific issues found (e.g. "EEE enabled",
+    /// "Half-duplex link", "Sub-gigabit link 100 Mb/s").
+    pub issues: Vec<String>,
+    pub error: Option<String>,
+}
+
+/// Result of the SAP/SDP listener. AES67 senders advertise themselves
+/// via Session Announcement Protocol on 224.2.127.254:9875 with an SDP
+/// payload describing each multicast stream's group, port, sample rate,
+/// channel count, and ptime. Unprivileged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SapProbeResult {
+    pub iface: String,
+    pub listen_secs: u32,
+    pub streams: Vec<SapStream>,
+    /// `"streams_found"` | `"silent"` | `"error"`.
+    pub verdict: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SapStream {
+    /// SDP `o=` field (origin).
+    pub origin: String,
+    /// SDP `s=` field (session name).
+    pub session_name: String,
+    pub multicast_group: Option<String>,
+    pub port: Option<u16>,
+    pub sample_rate_hz: Option<u32>,
+    pub channels: Option<u8>,
+    pub payload_type: Option<u8>,
+    pub ptime_ms: Option<f32>,
+    pub source_ip: String,
 }
 
 /// Top-level AV diagnostics payload returned by `run_av_diagnostics`. The
