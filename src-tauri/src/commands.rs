@@ -2387,6 +2387,57 @@ async fn elevate_and_run_probe(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Escape a single argument for the Win32 `CommandLineToArgvW` parser:
+/// wrap in `"..."` if the value contains whitespace or a double quote,
+/// and double any backslashes that immediately precede a quote (or the
+/// closing quote). This is the canonical "MSVCRT-compatible" rule that
+/// `cmd.exe`, .NET `Process.Start`, and CreateProcess all expect. We
+/// need it because PowerShell's `Start-Process -ArgumentList` joins
+/// list entries with raw spaces — without this step a NIC FriendlyName
+/// like `Dante Nic - 192.168.7.245` reaches the child as four separate
+/// args and the iface lookup falls back to `"Dante"`.
+#[cfg(target_os = "windows")]
+fn quote_for_createprocess(arg: &str) -> String {
+    let needs_quote = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '"'));
+    if !needs_quote {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut pending_backslashes = 0usize;
+    for c in arg.chars() {
+        if c == '\\' {
+            pending_backslashes += 1;
+            continue;
+        }
+        if c == '"' {
+            // Double each preceding backslash then escape the quote
+            // itself with one more backslash.
+            for _ in 0..(pending_backslashes * 2 + 1) {
+                out.push('\\');
+            }
+            pending_backslashes = 0;
+            out.push('"');
+            continue;
+        }
+        for _ in 0..pending_backslashes {
+            out.push('\\');
+        }
+        pending_backslashes = 0;
+        out.push(c);
+    }
+    // Trailing backslashes get doubled so they don't merge with the
+    // closing quote.
+    for _ in 0..(pending_backslashes * 2) {
+        out.push('\\');
+    }
+    out.push('"');
+    out
+}
+
 #[cfg(target_os = "windows")]
 async fn elevate_and_run_probe(
     exe: &str,
@@ -2414,7 +2465,14 @@ async fn elevate_and_run_probe(
         &out_path_str,
     ]
     .iter()
-    .map(|a| format!("'{}'", ps_quote(a)))
+    // Two-level escape required: (1) wrap any arg containing whitespace
+    // or double-quotes in `"..."` per CommandLineToArgvW so the child's
+    // arg parser sees one token (Windows NIC FriendlyNames routinely
+    // contain spaces, e.g. `Dante Nic - 192.168.7.245`), then
+    // (2) ps_quote-then-single-quote the result so PowerShell's
+    // `Start-Process -ArgumentList` element parser preserves it byte-
+    // exact when it composes the eventual command line.
+    .map(|a| format!("'{}'", ps_quote(&quote_for_createprocess(a))))
     .collect::<Vec<_>>()
     .join(",");
     let ps_cmd = format!(
@@ -2496,4 +2554,48 @@ pub async fn av_insights(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_arg_quoting_tests {
+    use super::quote_for_createprocess;
+
+    #[test]
+    fn plain_token_unchanged() {
+        assert_eq!(quote_for_createprocess("Ethernet0"), "Ethernet0");
+        assert_eq!(quote_for_createprocess("--probe"), "--probe");
+        assert_eq!(quote_for_createprocess("12"), "12");
+    }
+
+    #[test]
+    fn space_gets_wrapped() {
+        // Real-world NIC FriendlyName from a Dante host.
+        assert_eq!(
+            quote_for_createprocess("Dante Nic - 192.168.7.245"),
+            "\"Dante Nic - 192.168.7.245\""
+        );
+    }
+
+    #[test]
+    fn embedded_quote_doubled_backslashes() {
+        // `a"b` → `"a\"b"`
+        assert_eq!(quote_for_createprocess("a\"b"), "\"a\\\"b\"");
+        // `a\"b` → `"a\\\"b"` (the lone backslash before the quote
+        // doubles, plus one escape for the quote itself).
+        assert_eq!(quote_for_createprocess("a\\\"b"), "\"a\\\\\\\"b\"");
+    }
+
+    #[test]
+    fn trailing_backslashes_doubled_when_quoted() {
+        // No quoting needed, no doubling.
+        assert_eq!(quote_for_createprocess("a\\b"), "a\\b");
+        // Space forces quoting, trailing backslashes double so they
+        // don't merge with the closing quote.
+        assert_eq!(quote_for_createprocess("a b\\\\"), "\"a b\\\\\\\\\"");
+    }
+
+    #[test]
+    fn empty_arg_is_a_quoted_pair() {
+        assert_eq!(quote_for_createprocess(""), "\"\"");
+    }
 }
