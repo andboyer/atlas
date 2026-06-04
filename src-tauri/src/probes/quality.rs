@@ -22,8 +22,11 @@
 
 use crate::types::QualityStats;
 use serde::Deserialize;
+#[cfg(target_os = "macos")]
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+#[cfg(target_os = "macos")]
+use tokio::time::timeout;
+use tokio::time::Duration;
 
 /// Run the bufferbloat probe. Returns None on non-macOS, on probe timeout,
 /// or when the tool isn't installed.
@@ -115,6 +118,7 @@ async fn measure_platform() -> Option<QualityStats> {
 // some macOS builds emit.
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)] // Used by macOS `networkQuality` parser + tests; dead on Linux/Windows lib.
 struct RawQuality {
     #[serde(default)]
     dl_throughput: Option<f64>,
@@ -132,6 +136,7 @@ struct RawQuality {
     idle_latency_ms: Option<f64>,
 }
 
+#[allow(dead_code)] // macOS-only parser; reachable via tests on all platforms.
 fn parse_json(s: &str) -> Option<QualityStats> {
     // `networkQuality -c` emits one big JSON object, optionally preceded by
     // progress lines. Extract from the FIRST `{` to the LAST `}` — picking
@@ -194,6 +199,7 @@ fn parse_json(s: &str) -> Option<QualityStats> {
 //
 // Robust to slight wording changes ("capacity" vs "throughput").
 
+#[allow(dead_code)] // macOS-only parser; reachable via tests on all platforms.
 fn parse_text(s: &str) -> Option<QualityStats> {
     let mut dl: Option<f32> = None;
     let mut ul: Option<f32> = None;
@@ -249,6 +255,7 @@ fn parse_text(s: &str) -> Option<QualityStats> {
     })
 }
 
+#[allow(dead_code)] // macOS-only parser helper.
 fn parse_mbps(s: &str) -> Option<f32> {
     // "92.155 Mbps" → 92.155
     s.split_whitespace()

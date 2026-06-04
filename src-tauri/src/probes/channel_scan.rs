@@ -11,10 +11,13 @@
 ///            RSSI for nearby networks, so CoreWLAN is the preferred path.
 ///   Linux  — `iw dev <iface> scan` (requires root or CAP_NET_RAW; silently empty if unavailable)
 ///   Windows — `netsh wlan show networks mode=bssid`
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use crate::process_util::NoConsoleExt;
 use crate::types::NearbyAp;
 use anyhow::Result;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use tokio::process::Command;
+#[cfg(target_os = "macos")]
 use tokio::time::{timeout, Duration};
 
 /// Returns a list of nearby APs visible from this device.

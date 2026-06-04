@@ -20,6 +20,7 @@ impl NoConsoleExt for tokio::process::Command {
     fn no_console(&mut self) -> &mut Self {
         #[cfg(windows)]
         {
+            #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
             self.creation_flags(CREATE_NO_WINDOW);
         }
@@ -31,6 +32,7 @@ impl NoConsoleExt for std::process::Command {
     fn no_console(&mut self) -> &mut Self {
         #[cfg(windows)]
         {
+            #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
             self.creation_flags(CREATE_NO_WINDOW);
         }

@@ -17,12 +17,16 @@
 //! live telemetry chart.
 
 use crate::types::WifiEvent;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use chrono::Utc;
 use parking_lot::RwLock;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use tauri::Emitter;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use uuid::Uuid;
 
 pub const RING_CAPACITY: usize = 500;
@@ -202,6 +206,7 @@ fn parse_log_line(line: &str) -> Option<WifiEvent> {
     })
 }
 
+#[allow(dead_code)] // macOS-only event parser; reachable via tests on all platforms.
 fn classify(lower: &str) -> &'static str {
     if lower.contains("roam") {
         "roam"
@@ -227,6 +232,7 @@ fn classify(lower: &str) -> &'static str {
     }
 }
 
+#[allow(dead_code)] // macOS-only event parser; reachable via tests on all platforms.
 fn extract_bssid(message: &str) -> Option<String> {
     // 6-octet MAC, colon- or dash-delimited. The macOS log stream contains
     // multi-byte unicode (e.g. `…`), so we MUST iterate by char_indices and
@@ -268,6 +274,7 @@ fn extract_bssid(message: &str) -> Option<String> {
     None
 }
 
+#[allow(dead_code)] // macOS-only event parser; reachable via tests on all platforms.
 fn extract_ssid(message: &str) -> Option<String> {
     // Look for patterns like `SSID=foo`, `SSID "foo"`, or `ssid: foo`.
     let lower = message.to_lowercase();
@@ -285,6 +292,7 @@ fn extract_ssid(message: &str) -> Option<String> {
     None
 }
 
+#[allow(dead_code)] // macOS-only event parser; reachable via tests on all platforms.
 fn extract_rssi(message: &str) -> Option<i32> {
     // Pattern: `RSSI=-67` or `rssi: -67` or `-67 dBm`.
     let lower = message.to_lowercase();
@@ -372,6 +380,7 @@ while ($true) {
         // Detach the powershell console window from the GUI app (no flashing
         // black box on startup). 0x08000000 = CREATE_NO_WINDOW.
         #[cfg(target_os = "windows")]
+        #[allow(unused_imports)]
         use std::os::windows::process::CommandExt;
 
         let mut cmd = Command::new("powershell.exe");
@@ -513,14 +522,14 @@ fn classify_windows_event_id(id: i64) -> Option<&'static str> {
     // Values cross-referenced against Microsoft docs + real-world logs;
     // unknown IDs fall through to message-based classification.
     match id {
-        8000 | 8001 | 8002 => Some("assoc"), // connection start / success / failure
-        8003 | 8004 => Some("disassoc"),     // disconnect / disconnect-reason
-        11000..=11010 => Some("roam"),       // roaming start/complete/failure
-        12010..=12013 => Some("auth"),       // 802.1X / EAP
-        20010..=20020 => Some("auth"),       // wireless security
-        4100..=4109 => Some("kernel"),       // native WiFi driver
-        6100..=6109 => Some("scan"),         // scan complete/empty
-        10000..=10003 => Some("power"),      // radio state change
+        8000..=8002 => Some("assoc"),    // connection start / success / failure
+        8003..=8004 => Some("disassoc"), // disconnect / disconnect-reason
+        11000..=11010 => Some("roam"),   // roaming start/complete/failure
+        12010..=12013 => Some("auth"),   // 802.1X / EAP
+        20010..=20020 => Some("auth"),   // wireless security
+        4100..=4109 => Some("kernel"),   // native WiFi driver
+        6100..=6109 => Some("scan"),     // scan complete/empty
+        10000..=10003 => Some("power"),  // radio state change
         _ => None,
     }
 }
