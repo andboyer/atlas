@@ -2191,7 +2191,10 @@ pub async fn run_deep_probes(
 
     match kind.as_str() {
         "igmp-listen" => {
-            let json = elevate_and_run_probe(&exe, "igmp-listen", &iface, 12).await?;
+            // 130s catches an RFC-3376-default querier (General Query every
+            // 125s) with ~5s of slack. Anything shorter has a meaningful
+            // chance of missing the query even on a healthy network.
+            let json = elevate_and_run_probe(&exe, "igmp-listen", &iface, 130).await?;
             let igmp: IgmpProbeResult = serde_json::from_str(json.trim())
                 .map_err(|e| format!("parse IgmpProbeResult: {e}; raw={json:?}"))?;
             out.igmp = Some(igmp);
@@ -2287,7 +2290,13 @@ pub async fn run_deep_probes(
             // here, but for v1 DSCP on Windows runs separately as part
             // of its own kind invocation if requested. The `all` mode
             // here therefore only elevates for IGMP.
-            let igmp_fut = elevate_and_run_probe(&exe, "igmp-listen", &iface, 12);
+            //
+            // 130s catches an RFC-3376-default querier (General Query
+            // every 125s). MUST match the standalone igmp-listen branch
+            // above or "Run all" results will look misleadingly silent
+            // vs. "Test IGMP".
+            const IGMP_LISTEN_SECS: u32 = 130;
+            let igmp_fut = elevate_and_run_probe(&exe, "igmp-listen", &iface, IGMP_LISTEN_SECS);
 
             let (ptp_r, sap_r, link_r, lldp_r, igmp_json) =
                 tokio::join!(ptp_h, sap_h, link_h, lldp_h, igmp_fut);
@@ -2302,7 +2311,7 @@ pub async fn run_deep_probes(
                     Err(e) => {
                         out.igmp = Some(IgmpProbeResult {
                             iface: iface.clone(),
-                            listen_secs: 12,
+                            listen_secs: IGMP_LISTEN_SECS,
                             queriers_seen: Vec::new(),
                             reports_seen: 0,
                             leaves_seen: 0,
@@ -2314,7 +2323,7 @@ pub async fn run_deep_probes(
                 Err(e) => {
                     out.igmp = Some(IgmpProbeResult {
                         iface: iface.clone(),
-                        listen_secs: 12,
+                        listen_secs: IGMP_LISTEN_SECS,
                         queriers_seen: Vec::new(),
                         reports_seen: 0,
                         leaves_seen: 0,

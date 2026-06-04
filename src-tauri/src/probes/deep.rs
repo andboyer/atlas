@@ -93,10 +93,13 @@ fn run_dscp_audit(args: &[String]) -> i32 {
 
 fn run_igmp_listen(args: &[String]) -> i32 {
     let iface = arg_value(args, "--iface").unwrap_or_else(|| "en0".to_string());
+    // Upper-bound 180s so a thorough listen still catches an RFC-3376
+    // default querier (125s General Query interval) plus generous slack;
+    // lower bound 1s for unit-test friendliness.
     let listen_secs: u32 = arg_value(args, "--secs")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(12)
-        .clamp(1, 60);
+        .unwrap_or(130)
+        .clamp(1, 180);
 
     let result = match listen_for_igmp(&iface, listen_secs) {
         Ok(r) => r,
@@ -151,7 +154,8 @@ fn listen_for_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<IgmpProbeRes
     // Platform-specific bind + per-interface pinning. On macOS/Linux we
     // bind to INADDR_ANY and pin via setsockopt; on Windows we MUST bind
     // to the interface IPv4 address (INADDR_ANY won't deliver multicast
-    // on a raw socket on Windows) and then enable SIO_RCVALL_IGMPMCAST.
+    // on a raw socket on Windows) and then enable SIO_RCVALL (with a
+    // fallback to SIO_RCVALL_IGMPMCAST if the firewall blocks it).
     bind_for_igmp(&socket, iface)?;
 
     let deadline = Instant::now() + Duration::from_secs(listen_secs as u64);
@@ -332,19 +336,28 @@ fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
 /// Windows: raw IPv4 sockets receive only what's destined to the bound
 /// IP. To see *multicast* IGMP packets that aren't directly addressed
 /// to us we must (a) bind to the iface's IPv4 address (not INADDR_ANY),
-/// and (b) enable `SIO_RCVALL_IGMPMCAST` to subscribe to all
-/// link-local IGMP without joining each group. Requires admin —
-/// `commands.rs` already elevates via `Start-Process -Verb RunAs`.
+/// and (b) put the socket in receive-everything mode via an IOCTL.
+///
+/// We try `SIO_RCVALL` first (the same IOCTL Wireshark / Microsoft
+/// Network Monitor use) because `SIO_RCVALL_IGMPMCAST` is known to
+/// under-deliver on Windows 10/11 — it only surfaces IGMP packets the
+/// local host participates in, not external queriers. The raw socket's
+/// `IPPROTO_IGMP` protocol filter still narrows what reaches user-mode
+/// to IGMP, so SIO_RCVALL doesn't flood us with TCP/UDP. If SIO_RCVALL
+/// is denied (e.g. unusual firewall policy) we fall back to
+/// SIO_RCVALL_IGMPMCAST. Both require admin — `commands.rs` already
+/// elevates via `Start-Process -Verb RunAs`.
 #[cfg(target_os = "windows")]
 fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
     use std::os::raw::c_void;
     use std::os::windows::io::AsRawSocket;
     use windows_sys::Win32::Networking::WinSock::{WSAIoctl, SOCKET};
 
-    // SIO_RCVALL_IGMPMCAST — receive all IGMP multicast on the bound
-    // interface. Not in windows-sys' constants table, so we use the raw
-    // IOCTL code from <mstcpip.h>:
-    //   #define SIO_RCVALL_IGMPMCAST _WSAIOW(IOC_VENDOR,2) = 0x98000002
+    // IOCTL codes from <mstcpip.h>; windows-sys doesn't expose them as
+    // typed constants.
+    //   #define SIO_RCVALL            _WSAIOW(IOC_VENDOR,1) = 0x98000001
+    //   #define SIO_RCVALL_IGMPMCAST  _WSAIOW(IOC_VENDOR,2) = 0x98000002
+    const SIO_RCVALL: u32 = 0x9800_0001;
     const SIO_RCVALL_IGMPMCAST: u32 = 0x9800_0002;
 
     // Resolve the iface's IPv4 via our enumeration helper. Empty/any
@@ -379,6 +392,29 @@ fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
     let s = sock.as_raw_socket() as SOCKET;
     let on: u32 = 1;
     let mut bytes_returned: u32 = 0;
+
+    // Attempt SIO_RCVALL first (full promisc; matches Wireshark).
+    let ret = unsafe {
+        WSAIoctl(
+            s,
+            SIO_RCVALL,
+            &on as *const _ as *const c_void,
+            std::mem::size_of::<u32>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+            None,
+        )
+    };
+    if ret == 0 {
+        return Ok(());
+    }
+    let rcvall_err = std::io::Error::last_os_error();
+
+    // Fallback: SIO_RCVALL_IGMPMCAST. Some hardened Windows configs
+    // (Defender ATP / certain GPOs) block SIO_RCVALL but still permit
+    // the narrower IGMP-only IOCTL.
     let ret = unsafe {
         WSAIoctl(
             s,
@@ -392,10 +428,19 @@ fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
             None,
         )
     };
-    if ret != 0 {
-        return Err(std::io::Error::last_os_error());
+    if ret == 0 {
+        return Ok(());
     }
-    Ok(())
+    // Surface BOTH IOCTL failures so the user can tell whether the
+    // firewall, an EDR, or a missing privilege is the cause.
+    let igmpmcast_err = std::io::Error::last_os_error();
+    Err(std::io::Error::new(
+        ErrorKind::Other,
+        format!(
+            "SIO_RCVALL failed ({rcvall_err}); SIO_RCVALL_IGMPMCAST also failed ({igmpmcast_err}) — \
+             check Windows Defender Firewall inbound rules for Atlas and ensure the helper is running elevated"
+        ),
+    ))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

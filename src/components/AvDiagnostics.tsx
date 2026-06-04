@@ -641,7 +641,7 @@ function IgmpProbePanel({
     silent: {
       label: "Silent",
       tone: "info",
-      text: "No IGMP traffic during the listen window. Try again with an active Dante session on the wire.",
+      text: "No IGMP traffic during the ~130s listen window. Most queriers send one General Query every 125s, so a silent result usually means: wrong NIC pinned, the local firewall is dropping IGMP delivery to user-mode (Windows Defender Firewall inbound rules), or the switch's snooping VLAN doesn't reach this segment.",
     },
     error: {
       label: "Error",
@@ -660,7 +660,7 @@ function IgmpProbePanel({
     <ProbePanelShell
       icon={<Network className="h-4 w-4" />}
       title="IGMP querier"
-      hint="Listens on UDP 224.0.0.1 for IGMP General Queries — the #1 cause of 'Dante devices appear but no audio flows'. Requires admin."
+      hint="Listens on UDP 224.0.0.1 for IGMP General Queries — the #1 cause of 'Dante devices appear but no audio flows'. Listen runs for ~130s so it catches the RFC-default 125s query interval. Requires admin."
       running={running}
       onRun={onRun}
       buttonLabel="Test"
