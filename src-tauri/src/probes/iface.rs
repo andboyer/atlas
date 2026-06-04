@@ -57,6 +57,28 @@ pub struct NetworkInterfaceInfo {
     /// adapter just disappeared between enumeration and the read).
     #[serde(default)]
     pub index: Option<u32>,
+    /// Whether this NIC is a Wi-Fi (IEEE 802.11) radio (`Some(true)`),
+    /// a wired Ethernet adapter (`Some(false)`), or unknown / not
+    /// classified (`None`). The AV tab uses this to suppress Wi-Fi
+    /// inferences when the user has explicitly pinned diagnostics to a
+    /// wired interface — most pro-audio installs cable an Audinate-
+    /// approved USB-Ethernet adapter into the audio VLAN, and the
+    /// previous heuristic that fell back to the kernel's default
+    /// (typically Wi-Fi) was incorrectly flagging the entire wired
+    /// subnet as a Wi-Fi subnet.
+    ///
+    /// Source of truth per platform:
+    ///   - **Windows** — `GetAdaptersAddresses`'s `IfType` field
+    ///     (`IF_TYPE_IEEE80211` = wireless, `IF_TYPE_ETHERNET_CSMACD` =
+    ///     wired). Definitive.
+    ///   - **Linux** — `/sys/class/net/<name>/wireless` exists iff the
+    ///     interface is a wireless device per the kernel's wireless
+    ///     extension. Definitive.
+    ///   - **macOS** — parse `networksetup -listallhardwareports` and
+    ///     match the BSD device name against the "Wi-Fi" / "AirPort"
+    ///     hardware port. Definitive on every supported macOS version.
+    #[serde(default)]
+    pub is_wireless: Option<bool>,
 }
 
 /// Enumerate every interface the kernel knows about, with one row per
@@ -106,6 +128,7 @@ fn list_unix() -> Vec<NetworkInterfaceInfo> {
                         is_loopback,
                         is_physical,
                         index: None,
+                        is_wireless: classify_wireless_unix(&name),
                     });
                 entry.is_up = entry.is_up || is_up;
                 entry.is_loopback = entry.is_loopback || is_loopback;
@@ -228,6 +251,11 @@ fn list_windows() -> Option<Vec<NetworkInterfaceInfo>> {
         }
 
         if !name.is_empty() {
+            let is_wireless = match if_type {
+                IF_TYPE_IEEE80211 => Some(true),
+                IF_TYPE_ETHERNET_CSMACD => Some(false),
+                _ => None,
+            };
             out.push(NetworkInterfaceInfo {
                 name,
                 ipv4,
@@ -235,6 +263,7 @@ fn list_windows() -> Option<Vec<NetworkInterfaceInfo>> {
                 is_loopback,
                 is_physical,
                 index: Some(if_index),
+                is_wireless,
             });
         }
         cur = adapter.Next;
@@ -313,6 +342,104 @@ fn is_physical_name(name: &str) -> bool {
         }
     }
     true
+}
+
+/// Classify a Unix interface as wired / wireless / unknown.
+///
+/// - **Linux**: `/sys/class/net/<name>/wireless` exists iff the kernel
+///   treats the interface as wireless (cfg80211 or the older WirelessExt).
+///   Definitive on every supported distro.
+/// - **macOS**: parse `networksetup -listallhardwareports` once per
+///   process (then 60s cache) and match the BSD device name against the
+///   `Hardware Port` line. Anything whose port is `Wi-Fi` or `AirPort` is
+///   wireless; anything else with a BSD device entry is wired. `None` is
+///   returned for virtual interfaces (utun, awdl, bridge, ...) that
+///   never appear in the hardware-port listing.
+#[cfg(unix)]
+fn classify_wireless_unix(name: &str) -> Option<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        let sys_path = format!("/sys/class/net/{name}/wireless");
+        if std::path::Path::new(&sys_path).exists() {
+            return Some(true);
+        }
+        // Only call a NIC `wired` if it has a sysfs entry at all --
+        // otherwise it's a virtual / userspace device we shouldn't
+        // classify.
+        if std::path::Path::new(&format!("/sys/class/net/{name}")).exists() {
+            return Some(false);
+        }
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_hardware_port_map()
+            .get(name)
+            .map(|port| matches!(port.as_str(), "Wi-Fi" | "AirPort"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = name;
+        None
+    }
+}
+
+/// Cached BSD-device-name -> hardware-port map (`en0` -> `"Wi-Fi"`).
+/// Refreshed every 60s; `networksetup -listallhardwareports` typically
+/// returns in <50ms but we don't want to spawn a subprocess on every
+/// interface row.
+#[cfg(target_os = "macos")]
+fn macos_hardware_port_map() -> std::sync::Arc<HashMap<String, String>> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    type Cache = (Instant, std::sync::Arc<HashMap<String, String>>);
+    static CACHE: OnceLock<Mutex<Option<Cache>>> = OnceLock::new();
+    let cell = CACHE.get_or_init(|| Mutex::new(None));
+
+    let now = Instant::now();
+    if let Ok(guard) = cell.lock() {
+        if let Some((ts, ref map)) = *guard {
+            if now.duration_since(ts) < Duration::from_secs(60) {
+                return std::sync::Arc::clone(map);
+            }
+        }
+    }
+
+    let map = std::sync::Arc::new(parse_macos_hardware_ports());
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some((now, std::sync::Arc::clone(&map)));
+    }
+    map
+}
+
+/// Parse `networksetup -listallhardwareports`. Each port block looks like:
+///   Hardware Port: Wi-Fi
+///   Device: en0
+///   Ethernet Address: ...
+#[cfg(target_os = "macos")]
+fn parse_macos_hardware_ports() -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let output = std::process::Command::new("/usr/sbin/networksetup")
+        .arg("-listallhardwareports")
+        .output();
+    let Ok(out_ok) = output else { return out };
+    if !out_ok.status.success() {
+        return out;
+    }
+    let text = String::from_utf8_lossy(&out_ok.stdout);
+    let mut current_port: Option<String> = None;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("Hardware Port:") {
+            current_port = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("Device:") {
+            if let Some(port) = current_port.as_ref() {
+                out.insert(rest.trim().to_string(), port.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Look up an interface row by name. Returns `None` if the name doesn't

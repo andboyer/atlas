@@ -75,8 +75,25 @@ pub async fn collect(
         .as_deref()
         .and_then(iface_probe::find_by_name);
 
+    // Did the user explicitly pin a wired interface? If so the AV tab
+    // should not infer any Wi-Fi involvement — the previous behaviour
+    // of treating the pinned NIC's /24 as a Wi-Fi subnet would mark
+    // every Dante endpoint on the wired audio VLAN as "on Wi-Fi".
+    let pin_is_wired = pin_iface_info
+        .as_ref()
+        .and_then(|i| i.is_wireless)
+        .map(|w| !w)
+        .unwrap_or(false);
+
     // Augment each Dante device with TCP reachability + on-Wi-Fi flag.
-    let wifi_subnet = wifi_subnet_from_iface_or_scan(pin_iface_info.as_ref(), last_scan);
+    let wifi_subnet = if pin_is_wired {
+        // Explicit wired pin — never flag devices on this subnet as
+        // "on Wi-Fi". Fall through to whatever the scan reports for the
+        // host's actual Wi-Fi interface, which may legitimately differ.
+        wifi_subnet_from_scan(last_scan)
+    } else {
+        wifi_subnet_from_iface_or_scan(pin_iface_info.as_ref(), last_scan)
+    };
     for device in devices.iter_mut() {
         device.control_ports_open =
             probe_dante_ports(&device.ip, pin.as_deref()).await;
@@ -92,7 +109,7 @@ pub async fn collect(
         .iter()
         .any(|d| d.services.iter().any(|s| s.contains("_aes67")));
 
-    let warnings = build_warnings(&devices, &multicast, last_scan, pin.as_deref());
+    let warnings = build_warnings(&devices, &multicast, last_scan, pin.as_deref(), pin_is_wired);
 
     AvDiagnosticsResult {
         generated_at: Utc::now(),
@@ -124,18 +141,27 @@ async fn probe_dante_ports(ip: &str, pin_iface: Option<&str>) -> Vec<u16> {
 
 /// Pick the subnet we'll use to flag Dante devices as "on Wi-Fi".
 ///
-///   - If the caller pinned an interface AND that interface has an IPv4,
-///     use its IP as the subnet hint (a /24). This is the right answer
-///     for the explicit "diagnose AV from this wired NIC" workflow.
-///   - Otherwise fall back to the gateway IP from the last Wi-Fi scan
-///     (also as a /24) — the previous behaviour.
+///   - If the caller pinned an interface AND that interface is itself
+///     a wireless radio (or we couldn't classify it) AND it has an
+///     IPv4, use its IP as the subnet hint (a /24). This is right for
+///     the "I'm troubleshooting from this Wi-Fi host" workflow.
+///   - Otherwise fall back to the gateway IP from the last Wi-Fi scan.
+///
+/// Callers that have already determined the pinned NIC is wired skip
+/// this entirely and go straight to `wifi_subnet_from_scan` — the
+/// pinned NIC's subnet is the AV VLAN, not a Wi-Fi subnet, and using
+/// it here would incorrectly mark every wired Dante endpoint as
+/// "on Wi-Fi".
 fn wifi_subnet_from_iface_or_scan(
     pin: Option<&iface_probe::NetworkInterfaceInfo>,
     scan: Option<&ScanResult>,
 ) -> Option<(Ipv4Addr, u8)> {
     if let Some(info) = pin {
-        if let Some(ip) = info.ipv4.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
-            return Some((ip, 24));
+        let treat_as_wifi = info.is_wireless.unwrap_or(true);
+        if treat_as_wifi {
+            if let Some(ip) = info.ipv4.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
+                return Some((ip, 24));
+            }
         }
     }
     wifi_subnet_from_scan(scan)
@@ -183,6 +209,7 @@ fn build_warnings(
     multicast: &[InterfaceMulticast],
     scan: Option<&ScanResult>,
     pin_iface: Option<&str>,
+    pin_is_wired: bool,
 ) -> Vec<AvWarning> {
     let mut out = Vec::new();
 
@@ -312,8 +339,9 @@ fn build_warnings(
     // Wi-Fi specific. If we have a current Wi-Fi link AND devices found,
     // remind that Dante's PoE-powered endpoints are normally wired —
     // unless the user already pinned the diagnostics to a wired NIC, in
-    // which case the reminder is just noise.
-    if pin_iface.is_none() {
+    // which case the reminder is just noise. A wireless pin (or no pin
+    // at all on a Wi-Fi-attached host) still warrants the advisory.
+    if !pin_is_wired && pin_iface.is_none() {
         if let Some(s) = scan {
             if !devices.is_empty() && s.link.ssid.is_some() {
                 out.push(AvWarning {

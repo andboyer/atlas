@@ -298,6 +298,11 @@ export interface NetworkInterfaceInfo {
   /** Kernel interface index. Surfaced for completeness; the UI persists
    *  the `name` only (indices are not stable across reboots on Windows). */
   index: number | null;
+  /** Whether this NIC is a Wi-Fi (802.11) radio (`true`), wired
+   *  Ethernet / USB-Ethernet (`false`), or unclassified (`null`).
+   *  Used by the AV tab to suppress Wi-Fi inferences when the user
+   *  has pinned diagnostics to a wired adapter. */
+  is_wireless?: boolean | null;
 }
 
 // ─── Wi-Fi system events (Play C) ────────────────────────────────────────

@@ -1,6 +1,6 @@
 [package]
 name = "atlas"
-version = "0.1.8"
+version = "0.1.9"
 description = "Atlas — AI-assisted Wi-Fi & LAN diagnostics"
 authors = ["Andre Boyer"]
 edition = "2021"
