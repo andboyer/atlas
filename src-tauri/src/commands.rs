@@ -541,6 +541,28 @@ pub async fn run_quality_test() -> Result<crate::types::QualityStats, String> {
     crate::probes::quality::measure_quality_verbose().await
 }
 
+/// Run an IP-layer route trace from this host to `target` (default
+/// `1.1.1.1`). Returns an empty vec on any failure so the UI can render
+/// a clean "no hops resolved" state without having to inspect an error
+/// code path. **L2 switches never appear here** — they're transparent
+/// to IP and don't decrement TTL; the directly-attached switch, when
+/// discoverable, surfaces via LLDP in the AV tab.
+#[tauri::command]
+pub async fn run_traceroute(
+    target: Option<String>,
+) -> Result<Vec<crate::probes::traceroute::TraceHop>, String> {
+    let target = target
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("1.1.1.1");
+    Ok(crate::probes::traceroute::traceroute(
+        target,
+        crate::probes::traceroute::TraceConfig::default(),
+    )
+    .await)
+}
+
 // ── LLM ──────────────────────────────────────────────────────────────────────
 
 #[tauri::command]

@@ -1,7 +1,16 @@
 /**
  * NetworkPathPanel — visual hop view of the path from this device to the
- * internet. Surfaces ReachabilityStats + MTU + DNS leak + captive portal.
+ * internet. Surfaces ReachabilityStats + MTU + DNS leak + captive portal,
+ * plus a full IP-layer route trace fetched on demand via the
+ * `run_traceroute` Tauri command.
+ *
+ * Note: L2 switches are intentionally absent from the route trace —
+ * they don't decrement IP TTL so they're invisible to every form of
+ * traceroute. The directly-attached switch (when discoverable) is
+ * surfaced via LLDP in the AV tab.
  */
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Smartphone,
   Router,
@@ -9,8 +18,10 @@ import {
   Server,
   AlertTriangle,
   CheckCircle2,
+  RefreshCw,
+  Info,
 } from "lucide-react";
-import type { ReachabilityStats } from "../types";
+import type { ReachabilityStats, TraceHop } from "../types";
 
 interface Props {
   reachability: ReachabilityStats;
@@ -38,7 +49,35 @@ export function NetworkPathPanel({
   dnsLeak,
   captivePortal,
 }: Props) {
-  const hops = [
+  // Full route trace is fetched lazily — kept off the main scan path so
+  // quick scans stay snappy. Auto-runs once on mount and exposes a manual
+  // Refresh button. Empty array (vs `null`) means "trace completed but
+  // returned no hops" — typically a sandboxing / SIP issue on macOS.
+  const [hops, setHops] = useState<TraceHop[] | null>(null);
+  const [tracing, setTracing] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
+
+  async function runTrace() {
+    setTracing(true);
+    setTraceError(null);
+    try {
+      const result = await invoke<TraceHop[]>("run_traceroute", {
+        target: null,
+      });
+      setHops(result);
+    } catch (e) {
+      setTraceError(typeof e === "string" ? e : String(e));
+    } finally {
+      setTracing(false);
+    }
+  }
+
+  useEffect(() => {
+    void runTrace();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const hopStrip = [
     {
       icon: <Smartphone className="h-4 w-4" />,
       label: "This device",
@@ -89,7 +128,7 @@ export function NetworkPathPanel({
       </p>
 
       <div className="flex flex-wrap items-stretch gap-2">
-        {hops.map((h, i) => (
+        {hopStrip.map((h, i) => (
           <div
             key={h.label}
             className="flex flex-1 min-w-[140px] items-center gap-3"
@@ -115,12 +154,19 @@ export function NetworkPathPanel({
                 </div>
               )}
             </div>
-            {i < hops.length - 1 && (
+            {i < hopStrip.length - 1 && (
               <div className="flex-shrink-0 text-[var(--color-muted)]">→</div>
             )}
           </div>
         ))}
       </div>
+
+      <TracePanel
+        hops={hops}
+        tracing={tracing}
+        error={traceError}
+        onRefresh={runTrace}
+      />
 
       <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">
         <Diag
@@ -190,6 +236,112 @@ function Diag({
       <div className="mt-1 text-[10px] text-[var(--color-muted)]">
         {ok ? okText : badText}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Full IP-layer route trace. Renders the hops returned by
+ * `run_traceroute` as a vertical list with per-hop RTT color-coded the
+ * same way as the headline path strip. A muted info banner explains why
+ * L2 switches are never present — a frequent source of confusion when
+ * comparing this view to a vendor switch-management UI.
+ */
+function TracePanel({
+  hops,
+  tracing,
+  error,
+  onRefresh,
+}: {
+  hops: TraceHop[] | null;
+  tracing: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="mt-5 rounded-xl border border-[var(--color-border)] bg-[var(--color-panel-2)] p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-text)]">
+          <Router className="h-3.5 w-3.5 text-[var(--color-accent)]" />
+          Full route trace
+          {hops && hops.length > 0 && (
+            <span className="text-[10px] font-normal text-[var(--color-muted)]">
+              · {hops.length} hop{hops.length === 1 ? "" : "s"} to 1.1.1.1
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={tracing}
+          className="flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] transition hover:bg-[var(--color-panel)] disabled:opacity-50"
+        >
+          <RefreshCw
+            className={`h-3 w-3 ${tracing ? "animate-spin" : ""}`}
+          />
+          {tracing ? "Tracing…" : "Refresh"}
+        </button>
+      </div>
+
+      <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2 text-[10px] leading-snug text-[var(--color-muted)]">
+        <Info className="mt-0.5 h-3 w-3 flex-shrink-0" />
+        <span>
+          <strong className="text-[var(--color-text)]">
+            L2 switches don't appear here.
+          </strong>{" "}
+          IP traceroute can only reveal devices that decrement the TTL — i.e.
+          L3 routers. Ethernet switches forward frames transparently and are
+          invisible by design. Your directly-attached switch, when
+          discoverable, is shown via LLDP in the <em>AV diagnostics</em> tab.
+        </span>
+      </div>
+
+      {error && (
+        <p className="mb-2 text-[10px] text-rose-400">Trace failed: {error}</p>
+      )}
+
+      {hops == null && !tracing && !error && (
+        <p className="text-[10px] text-[var(--color-muted)]">
+          Press Refresh to run a route trace.
+        </p>
+      )}
+
+      {hops != null && hops.length === 0 && !tracing && (
+        <p className="text-[10px] text-[var(--color-muted)]">
+          No hops resolved. The platform's <code>traceroute</code> /{" "}
+          <code>tracert</code> binary may be missing, blocked by a host
+          firewall, or sandboxed.
+        </p>
+      )}
+
+      {hops != null && hops.length > 0 && (
+        <ol className="space-y-1">
+          {hops.map((hop) => (
+            <li
+              key={hop.idx}
+              className="flex items-center gap-3 rounded-md border border-transparent px-2 py-1 hover:border-[var(--color-border)]"
+            >
+              <span className="w-6 text-right font-mono text-[10px] text-[var(--color-muted)]">
+                {hop.idx}
+              </span>
+              <span className="flex-1 truncate font-mono text-xs text-[var(--color-text)]">
+                {hop.ip ?? (hop.timed_out ? "* * *" : "(unknown)")}
+                {hop.hostname && hop.hostname !== hop.ip && (
+                  <span className="ml-2 text-[10px] text-[var(--color-muted)]">
+                    {hop.hostname}
+                  </span>
+                )}
+              </span>
+              <span
+                className="w-20 text-right font-mono text-xs tabular-nums"
+                style={{ color: latencyTone(hop.rtt_ms) }}
+              >
+                {fmtMs(hop.rtt_ms)}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

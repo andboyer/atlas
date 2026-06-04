@@ -25,6 +25,19 @@
   --font-mono: "JetBrains Mono", "Geist Mono", ui-monospace, "SF Mono", monospace;
 }
 
+/* `color-scheme: dark` flips every native widget the browser still
+ * renders itself (date pickers, system scrollbars, the popup that drops
+ * from <select> on macOS WKWebView and Windows WebView2) into its dark
+ * variant. Without this, even fully Tailwind-styled controls show a
+ * light-mode popup on click, which jars against the navy hull. */
+:root {
+  color-scheme: dark;
+  /* Drives every checkbox tick, radio dot, range fill, progress bar,
+   * and text-input caret highlight — single source of truth instead of
+   * each component overriding `accent-color` inline. */
+  accent-color: var(--color-accent);
+}
+
 html,
 body,
 #root {
@@ -174,4 +187,161 @@ body {
     rgba(42, 74, 127, 0.6) 0%,
     transparent 100%
   );
+}
+
+/* ── Atlas native form controls ──────────────────────────────────────
+ * Pulls every <select>, <input>, <textarea> into the brand palette so
+ * the app feels coherent across macOS WKWebView, Windows WebView2 and
+ * Linux WebKitGTK. Components that already apply Tailwind background /
+ * border classes still win (higher specificity); this layer is the
+ * default for anything unstyled AND fixes the bits the OS still draws
+ * (popup menu from <select>, calendar / spinner glyphs, focus ring
+ * outside the element box).
+ *
+ * One known limit: macOS WKWebView renders the <select> drop-down menu
+ * as a true native NSMenu and ignores <option> CSS. `color-scheme: dark`
+ * (set on :root above) is the most we can do — it picks the dark
+ * NSMenu variant. Anywhere a fully-themed popup is essential, build a
+ * custom dropdown rather than a native <select>.
+ */
+:where(select, input, textarea) {
+  font-family: var(--font-ui);
+  color: var(--color-text);
+  background-color: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  caret-color: var(--color-accent);
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--color-muted);
+  opacity: 0.8;
+}
+
+:where(select, input, textarea):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-color: var(--color-accent);
+}
+
+:where(select, input, textarea):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Custom chevron for every <select> regardless of where it lives in the
+ * tree, so the native macOS / Windows arrow never bleeds through. The
+ * SVG is the parchment colour inlined so we don't take a network round
+ * trip per render. Components can opt out with `appearance: auto` if
+ * they really want the OS arrow (none currently do). */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23F5EFE0' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 0.9rem;
+  padding-right: 1.9rem;
+}
+
+/* <option> styling — honoured by Chromium / WebKitGTK / Firefox. WKWebView
+ * on macOS ignores this (it draws a native NSMenu), so it pairs with the
+ * :root color-scheme above as a belt-and-suspenders. */
+option {
+  background-color: var(--color-panel);
+  color: var(--color-text);
+}
+option:checked,
+option:hover {
+  background-color: var(--color-panel-2);
+  color: var(--color-text);
+}
+
+/* Auto-fill in WKWebView paints the input yellow by default. The inset
+ * shadow + caret override are the canonical workaround — webkit-text-
+ * fill-color is the only way to force the foreground colour because
+ * the actual `color` property is locked during autofill. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--color-panel) inset;
+  -webkit-text-fill-color: var(--color-text);
+  caret-color: var(--color-accent);
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Number-input spin buttons: WebKit and Firefox draw OS-native arrows
+ * that can't be themed. Hide them across the board — the Tailwind
+ * fields next to them already use big tap targets, and we never rely on
+ * the spin affordance. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* `search` clear-X is also OS-themed; recolour to muted parchment. */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394A3C4' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><line x1='18' y1='6' x2='6' y2='18'/><line x1='6' y1='6' x2='18' y2='18'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+  cursor: pointer;
+}
+
+/* Date / time / colour picker openers — the glyph the OS draws inside
+ * the input. `invert(...)` is the cross-platform recipe that bends a
+ * dark-grey OS glyph toward parchment without us needing per-OS SVGs. */
+input::-webkit-calendar-picker-indicator {
+  filter: invert(89%) sepia(7%) saturate(517%) hue-rotate(11deg) brightness(105%) contrast(91%);
+  cursor: pointer;
+  opacity: 0.85;
+}
+input::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+/* Range slider: track + thumb. `accent-color` (set on :root) handles
+ * Firefox + Chromium for the fill, but the track and thumb still need
+ * explicit recipes per engine. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  padding: 0;
+  border: none;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--color-border);
+  border-radius: 999px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-bg);
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--color-border);
+  border-radius: 999px;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-bg);
+  cursor: pointer;
 }

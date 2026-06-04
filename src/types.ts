@@ -25,6 +25,23 @@ export interface ReachabilityStats {
   packet_loss_pct: number | null;
 }
 
+/**
+ * One hop in an IP-layer route trace. `idx` is the 1-based TTL value
+ * used to elicit the response. `ip` / `hostname` may both be null when
+ * every probe at this TTL timed out (the router is silent or rate-
+ * limiting ICMP-time-exceeded).
+ *
+ * Returned by the `run_traceroute` Tauri command. **L2 switches do not
+ * appear here by design** — they don't decrement IP TTL.
+ */
+export interface TraceHop {
+  idx: number;
+  ip: string | null;
+  hostname: string | null;
+  rtt_ms: number | null;
+  timed_out: boolean;
+}
+
 export interface DeviceInfo {
   mac: string;
   ip: string | null;

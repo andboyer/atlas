@@ -109,6 +109,7 @@ pub fn run() {
             commands::list_stress_tests,
             commands::get_narratives,
             commands::run_quality_test,
+            commands::run_traceroute,
             commands::explain_findings,
             commands::radio_insights,
             commands::run_av_diagnostics,
