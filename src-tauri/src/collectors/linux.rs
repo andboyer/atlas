@@ -28,8 +28,8 @@ impl WifiCollector for LinuxCollector {
         Ok(parse_iw_output(&link_str, &info_str))
     }
 
-    async fn reachability(&self) -> Result<ReachabilityStats> {
-        crate::probes::reachability::collect().await
+    async fn reachability(&self, iface: Option<&str>) -> Result<ReachabilityStats> {
+        crate::probes::reachability::collect(iface).await
     }
 }
 

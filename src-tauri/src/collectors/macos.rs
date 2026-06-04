@@ -21,8 +21,8 @@ impl WifiCollector for MacOsCollector {
         Ok(parse_system_profiler(&stdout))
     }
 
-    async fn reachability(&self) -> Result<ReachabilityStats> {
-        crate::probes::reachability::collect().await
+    async fn reachability(&self, iface: Option<&str>) -> Result<ReachabilityStats> {
+        crate::probes::reachability::collect(iface).await
     }
 }
 

@@ -19,8 +19,8 @@ impl WifiCollector for WindowsCollector {
         Ok(parse_netsh_interfaces(&stdout))
     }
 
-    async fn reachability(&self) -> Result<ReachabilityStats> {
-        crate::probes::reachability::collect().await
+    async fn reachability(&self, iface: Option<&str>) -> Result<ReachabilityStats> {
+        crate::probes::reachability::collect(iface).await
     }
 }
 

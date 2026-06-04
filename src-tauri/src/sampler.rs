@@ -23,11 +23,15 @@
 //! mirrored ring buffer that grows incrementally from event ticks.
 
 use crate::collectors::default_collector;
-use crate::probes::reachability::{default_gateway, dns_resolve_ms, ping};
+use crate::probes::reachability::{
+    default_gateway_for_iface, dns_resolve_ms, ping_via,
+};
+use crate::settings::Settings;
 use crate::types::{LinkStats, LiveSample};
 use chrono::Utc;
 use parking_lot::RwLock;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -58,7 +62,11 @@ impl SamplerHandle {
 }
 
 /// Spawn the three sampler tasks and return the shared ring + stop signal.
-pub fn start_sampler(app: AppHandle) -> SamplerHandle {
+///
+/// `settings_path` is consulted by the gateway refresher every 30 s so a
+/// change to the global NIC pin from the header propagates to the live
+/// 1 Hz metrics within that window — no app restart required.
+pub fn start_sampler(app: AppHandle, settings_path: PathBuf) -> SamplerHandle {
     let running = Arc::new(AtomicBool::new(true));
     let ring: LiveRing = Arc::new(RwLock::new(VecDeque::with_capacity(RING_CAPACITY)));
 
@@ -66,13 +74,20 @@ pub fn start_sampler(app: AppHandle) -> SamplerHandle {
     spawn_link_refresher(Arc::clone(&link_snap), Arc::clone(&running));
 
     let gateway_ip: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
-    spawn_gateway_refresher(Arc::clone(&gateway_ip), Arc::clone(&running));
+    let pinned_iface: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+    spawn_gateway_refresher(
+        Arc::clone(&gateway_ip),
+        Arc::clone(&pinned_iface),
+        settings_path,
+        Arc::clone(&running),
+    );
 
     spawn_tick(
         app,
         Arc::clone(&ring),
         link_snap,
         gateway_ip,
+        pinned_iface,
         Arc::clone(&running),
     );
 
@@ -99,20 +114,41 @@ fn spawn_link_refresher(snap: Arc<RwLock<Option<LinkStats>>>, running: Arc<Atomi
     });
 }
 
-fn spawn_gateway_refresher(snap: Arc<RwLock<Option<String>>>, running: Arc<AtomicBool>) {
+fn spawn_gateway_refresher(
+    gateway_snap: Arc<RwLock<Option<String>>>,
+    iface_snap: Arc<RwLock<Option<String>>>,
+    settings_path: PathBuf,
+    running: Arc<AtomicBool>,
+) {
     tokio::spawn(async move {
-        // First refresh immediately so the first few ticks have a gateway.
-        if let Some(ip) = default_gateway().await {
-            *snap.write() = Some(ip);
+        // Re-read settings every 30 s so changing the global NIC pick
+        // from the header propagates without an app restart. The 30 s
+        // window matches the gateway-IP refresh cadence (re-resolving
+        // both at once keeps them in sync — switching NIC implies the
+        // gateway IP changes too).
+        async fn refresh(
+            gw: &Arc<RwLock<Option<String>>>,
+            iface: &Arc<RwLock<Option<String>>>,
+            path: &PathBuf,
+        ) {
+            let pinned = Settings::load(path)
+                .ok()
+                .map(|s| s.preferred_interface.trim().to_string())
+                .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"));
+            *iface.write() = pinned.clone();
+            if let Some(ip) = default_gateway_for_iface(pinned.as_deref()).await {
+                *gw.write() = Some(ip);
+            }
         }
+
+        // First refresh immediately so the first few ticks have a gateway.
+        refresh(&gateway_snap, &iface_snap, &settings_path).await;
         while running.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_secs(30)).await;
             if !running.load(Ordering::Relaxed) {
                 break;
             }
-            if let Some(ip) = default_gateway().await {
-                *snap.write() = Some(ip);
-            }
+            refresh(&gateway_snap, &iface_snap, &settings_path).await;
         }
         tracing::debug!(target: "sampler", "gateway refresher stopped");
     });
@@ -123,6 +159,7 @@ fn spawn_tick(
     ring: LiveRing,
     link_snap: Arc<RwLock<Option<LinkStats>>>,
     gateway_ip: Arc<RwLock<Option<String>>>,
+    pinned_iface: Arc<RwLock<Option<String>>>,
     running: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
@@ -143,9 +180,10 @@ fn spawn_tick(
             next_at = Instant::now() + TICK_INTERVAL;
 
             let gw_ip = gateway_ip.read().clone();
+            let iface = pinned_iface.read().clone();
             let (gw_ms, inet_ms, dns_ms) = tokio::join!(
-                bounded_ping(gw_ip.as_deref()),
-                bounded_ping(Some("1.1.1.1")),
+                bounded_ping_via(gw_ip.as_deref(), iface.as_deref()),
+                bounded_ping_via(Some("1.1.1.1"), iface.as_deref()),
                 bounded_dns("apple.com"),
             );
 
@@ -181,9 +219,9 @@ fn spawn_tick(
     });
 }
 
-async fn bounded_ping(host: Option<&str>) -> Option<f32> {
+async fn bounded_ping_via(host: Option<&str>, iface: Option<&str>) -> Option<f32> {
     let host = host?;
-    match timeout(PROBE_BUDGET, ping(host, 1)).await {
+    match timeout(PROBE_BUDGET, ping_via(host, 1, iface)).await {
         Ok(v) => v,
         Err(_) => None,
     }

@@ -14,7 +14,10 @@ pub mod windows;
 #[async_trait]
 pub trait WifiCollector: Send + Sync {
     async fn link_stats(&self) -> Result<LinkStats>;
-    async fn reachability(&self) -> Result<ReachabilityStats>;
+    /// Reachability probes are pinned to `iface` when supplied (gateway is
+    /// resolved as that NIC's next-hop, every ping is source-bound to it).
+    /// `None` is the historical "kernel picks the default route" behaviour.
+    async fn reachability(&self, iface: Option<&str>) -> Result<ReachabilityStats>;
 }
 
 pub fn default_collector() -> Box<dyn WifiCollector> {

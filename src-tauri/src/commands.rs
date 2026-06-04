@@ -84,7 +84,11 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
             .ok_or_else(|| "link_stats timed out".to_string())?
             .map_err(|e| format!("link_stats: {e}"))?;
         let mut link = link;
-        let reach = timed("reachability", collector.reachability())
+        // Pin reachability to the operator's selected NIC so the gateway
+        // tile reflects that NIC's next-hop instead of whichever default
+        // route currently wins the kernel's metric tie-break.
+        let pinned_iface = resolved_iface(&state, None);
+        let reach = timed("reachability", collector.reachability(pinned_iface.as_deref()))
             .await
             .ok_or_else(|| "reachability timed out".to_string())?
             .map_err(|e| format!("reachability: {e}"))?;
@@ -389,7 +393,7 @@ pub async fn start_monitoring(
     if let Some(prev) = state.sampler_handle.lock().take() {
         prev.stop();
     }
-    let sampler = crate::sampler::start_sampler(app.clone());
+    let sampler = crate::sampler::start_sampler(app.clone(), state.settings_path.clone());
     let sampler_ring = sampler.ring.clone();
     *state.sampler_handle.lock() = Some(sampler);
 
@@ -507,7 +511,11 @@ pub async fn run_stress_test(
     state: State<'_, AppState>,
     kind: String,
 ) -> Result<crate::types::StressTestResult, String> {
-    let result = crate::stress::run(app, &kind).await?;
+    // Pin the gateway-flood test to the operator's selected NIC so the
+    // stress sample reflects that NIC's path. DNS / WAN tests are iface-
+    // agnostic by design.
+    let iface = resolved_iface(&state, None);
+    let result = crate::stress::run(app, &kind, iface.as_deref()).await?;
     // Cache for the printable report. Keep most recent first, cap at 20.
     {
         let mut ring = state.recent_stress_results.lock();

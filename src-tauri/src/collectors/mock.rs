@@ -27,7 +27,7 @@ impl WifiCollector for MockCollector {
         })
     }
 
-    async fn reachability(&self) -> Result<ReachabilityStats> {
+    async fn reachability(&self, _iface: Option<&str>) -> Result<ReachabilityStats> {
         Ok(ReachabilityStats {
             gateway_ip: Some("192.168.1.1".into()),
             gateway_latency_ms: Some(2.4),

@@ -16,7 +16,7 @@
 //!   anycast endpoints. Big tail with low local pings means upstream
 //!   congestion.
 
-use crate::probes::reachability::{default_gateway, ping};
+use crate::probes::reachability::{default_gateway_for_iface, ping_via};
 use crate::types::{StressSample, StressStats, StressTestResult};
 use chrono::Utc;
 use std::time::Instant;
@@ -48,10 +48,12 @@ pub fn list_kinds() -> Vec<(&'static str, &'static str, &'static str)> {
     ]
 }
 
-/// Run the named stress test to completion.
-pub async fn run(app: AppHandle, kind: &str) -> Result<StressTestResult, String> {
+/// Run the named stress test to completion. `iface` (optional) pins the
+/// probes that have a notion of "the" gateway (ping_flood) to that NIC's
+/// next-hop instead of whatever default route the kernel picks.
+pub async fn run(app: AppHandle, kind: &str, iface: Option<&str>) -> Result<StressTestResult, String> {
     match kind {
-        KIND_PING_FLOOD => Ok(ping_flood(app).await),
+        KIND_PING_FLOOD => Ok(ping_flood(app, iface).await),
         KIND_DNS_BURST => Ok(dns_burst(app).await),
         KIND_WAN_PARALLEL => Ok(wan_parallel(app).await),
         other => Err(format!("unknown stress test kind: {other}")),
@@ -60,11 +62,11 @@ pub async fn run(app: AppHandle, kind: &str) -> Result<StressTestResult, String>
 
 // ─── ping flood ──────────────────────────────────────────────────────────────
 
-async fn ping_flood(app: AppHandle) -> StressTestResult {
+async fn ping_flood(app: AppHandle, iface: Option<&str>) -> StressTestResult {
     let id = Uuid::new_v4().to_string();
     let start_wall = Utc::now();
     let started = Instant::now();
-    let gw = default_gateway().await;
+    let gw = default_gateway_for_iface(iface).await;
 
     let mut samples: Vec<StressSample> = Vec::with_capacity(32);
 
@@ -90,7 +92,7 @@ async fn ping_flood(app: AppHandle) -> StressTestResult {
 
     for i in 0..32 {
         let t0 = Instant::now();
-        let latency = timeout(Duration::from_millis(1500), ping(&target, 1))
+        let latency = timeout(Duration::from_millis(1500), ping_via(&target, 1, iface))
             .await
             .ok()
             .flatten();

@@ -56,7 +56,14 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
 
     let started_at = Utc::now();
     let mut link = collector.link_stats().await.ok()?;
-    let reach = collector.reachability().await.ok()?;
+    // Pin reachability to the global NIC selection so the background
+    // monitor surfaces gateway / latency from the operator-chosen NIC,
+    // not whichever default route wins right now.
+    let pinned_iface = crate::commands::resolved_iface(&state, None);
+    let reach = collector
+        .reachability(pinned_iface.as_deref())
+        .await
+        .ok()?;
 
     let settings = Settings::load(&state.settings_path).unwrap_or_default();
     let profile = crate::commands::profile_hints_from(&settings);
