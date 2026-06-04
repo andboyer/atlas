@@ -103,10 +103,19 @@ pub async fn ping_loss(host: &str, count: u32) -> Option<f32> {
 async fn run_ping(host: &str, count: u32) -> Option<String> {
     let mut cmd = Command::new("ping");
     cmd.no_console();
+    // Per-platform per-packet wait. The flag means very different things:
+    //   macOS  `-W 1000` → 1000 ms (per packet)
+    //   Linux  `-W 1`    → 1 s     (per packet — accepts seconds only)
+    //   Windows `-w 1000` → 1000 ms (per packet)
+    // Mixing those up turns Linux `-W 1000` into a 1000-second wait per
+    // packet which silently caps probes at the outer 15s timeout and makes
+    // every reachability sample look broken.
     #[cfg(target_os = "windows")]
     cmd.args(["-n", &count.to_string(), "-w", "1000", host]);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     cmd.args(["-c", &count.to_string(), "-W", "1000", host]);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    cmd.args(["-c", &count.to_string(), "-W", "1", host]);
 
     let out = timeout(Duration::from_secs(15), cmd.output())
         .await

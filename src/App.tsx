@@ -16,6 +16,7 @@ import {
 import { StatusCard } from "./components/StatusCard";
 import { KpiRow } from "./components/KpiRow";
 import { Tabs } from "./components/Tabs";
+import { NicPicker } from "./components/NicPicker";
 import { FindingsList } from "./components/FindingsList";
 import { DeviceList } from "./components/DeviceList";
 import { HistoryPanel } from "./components/HistoryPanel";
@@ -254,7 +255,8 @@ function App() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <NicPicker />
             {lastScan && (
               <button
                 onClick={handleExport}

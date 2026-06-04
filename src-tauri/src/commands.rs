@@ -547,20 +547,29 @@ pub async fn run_quality_test() -> Result<crate::types::QualityStats, String> {
 /// code path. **L2 switches never appear here** — they're transparent
 /// to IP and don't decrement TTL; the directly-attached switch, when
 /// discoverable, surfaces via LLDP in the AV tab.
+///
+/// `iface` pins the trace to a specific NIC; when `None` we fall back
+/// to `Settings.preferred_interface` (the global header pin). Honoured
+/// on Unix via `traceroute -i <iface>` and on Windows via
+/// `tracert -S <ipv4-of-iface>` (the closest equivalent that flag set
+/// supports; routing-table override happens at the source-IP layer).
 #[tauri::command]
 pub async fn run_traceroute(
+    state: State<'_, AppState>,
     target: Option<String>,
+    iface: Option<String>,
 ) -> Result<Vec<crate::probes::traceroute::TraceHop>, String> {
     let target = target
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("1.1.1.1");
-    Ok(crate::probes::traceroute::traceroute(
-        target,
-        crate::probes::traceroute::TraceConfig::default(),
-    )
-    .await)
+    let pinned = resolved_iface(&state, iface.as_deref());
+    let cfg = crate::probes::traceroute::TraceConfig {
+        iface: pinned,
+        ..crate::probes::traceroute::TraceConfig::default()
+    };
+    Ok(crate::probes::traceroute::traceroute(target, cfg).await)
 }
 
 // ── LLM ──────────────────────────────────────────────────────────────────────
@@ -2116,7 +2125,7 @@ pub fn demo_devices() -> Vec<DeviceInfo> {
 /// can cross-reference Dante endpoints against the host's Wi-Fi subnet.
 ///
 /// `iface` pins every probe to a specific NIC (e.g. `"en4"`). When the
-/// frontend passes `None` we fall back to `Settings.preferred_av_interface`;
+/// frontend passes `None` we fall back to `Settings.preferred_interface`;
 /// when that's also empty the probes use the kernel-default routing (the
 /// previous behaviour).
 #[tauri::command]
@@ -2125,7 +2134,7 @@ pub async fn run_av_diagnostics(
     last_scan: Option<ScanResult>,
     iface: Option<String>,
 ) -> Result<AvDiagnosticsResult, String> {
-    let resolved = resolved_av_iface(&state, iface.as_deref());
+    let resolved = resolved_iface(&state, iface.as_deref());
     let result = crate::probes::av::collect(last_scan.as_ref(), resolved.as_deref()).await;
     // Stash the result so `export_report` can include it without the
     // frontend having to re-pass it on every call.
@@ -2134,7 +2143,7 @@ pub async fn run_av_diagnostics(
 }
 
 /// List every network interface the host kernel currently exposes, so the
-/// settings UI can render a picker for `preferred_av_interface`. Loopback
+/// settings UI can render a picker for `preferred_interface`. Loopback
 /// and admin-down interfaces are returned too — the frontend filters
 /// them out so the same list can be reused by future diagnostics.
 #[tauri::command]
@@ -2143,10 +2152,13 @@ pub async fn list_network_interfaces(
     Ok(crate::probes::iface::list_interfaces())
 }
 
-/// Resolve the AV interface to use: explicit argument wins, then the
-/// persisted setting, then `None` (kernel default). Empty / "auto"
-/// strings are normalised to `None`.
-fn resolved_av_iface(state: &State<'_, AppState>, explicit: Option<&str>) -> Option<String> {
+/// Resolve the active NIC for any iface-aware probe: explicit argument
+/// wins, then the persisted global pin (`Settings.preferred_interface`),
+/// then `None` (kernel default). Empty / "auto" strings normalise to
+/// `None`. Shared by AV diagnostics, the deep probes, and traceroute so
+/// every iface-pinned subsystem sees the same NIC the user picked in
+/// the global header.
+pub(crate) fn resolved_iface(state: &State<'_, AppState>, explicit: Option<&str>) -> Option<String> {
     let normalise = |s: &str| {
         let t = s.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("auto") {
@@ -2160,7 +2172,7 @@ fn resolved_av_iface(state: &State<'_, AppState>, explicit: Option<&str>) -> Opt
     }
     Settings::load(&state.settings_path)
         .ok()
-        .and_then(|s| normalise(&s.preferred_av_interface))
+        .and_then(|s| normalise(&s.preferred_interface))
 }
 
 /// Run a privileged deep probe (currently only `igmp-listen` is wired) by
@@ -2178,7 +2190,7 @@ pub async fn run_deep_probes(
     kind: String,
     iface: Option<String>,
 ) -> Result<DeepProbeResult, String> {
-    let iface = resolved_av_iface(&state, iface.as_deref()).unwrap_or_else(|| "en0".to_string());
+    let iface = resolved_iface(&state, iface.as_deref()).unwrap_or_else(|| "en0".to_string());
     let exe = std::env::current_exe()
         .map_err(|e| format!("locate current exe: {e}"))?
         .to_string_lossy()

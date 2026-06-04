@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { useApp } from "../store";
 import { AvInsights } from "./AvInsights";
-import { AvInterfacePicker } from "./AvInterfacePicker";
 import type {
   AvWarning,
   DanteDevice,
@@ -95,7 +94,6 @@ export function AvDiagnostics() {
             </button>
           </div>
         </div>
-        <AvInterfacePicker />
       </div>
 
       {error && (

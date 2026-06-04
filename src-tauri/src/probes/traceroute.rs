@@ -41,11 +41,17 @@ pub struct TraceHop {
 /// Probe configuration. Hard caps every dimension so the function can
 /// never exceed `(per_hop_wait * max_hops * queries_per_hop) + 2s`
 /// of wall time regardless of network conditions.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TraceConfig {
     pub max_hops: u8,
     pub per_hop_wait_secs: u8,
     pub queries_per_hop: u8,
+    /// Optional kernel name of the NIC to route the trace through
+    /// (`en4`, `Ethernet 2`, …). When `None` the OS picks per its
+    /// routing table. On Unix this maps to `traceroute -i <iface>`;
+    /// on Windows we resolve the iface's IPv4 and pass `tracert -S <ip>`
+    /// because `tracert` has no `-i` equivalent.
+    pub iface: Option<String>,
 }
 
 impl Default for TraceConfig {
@@ -56,6 +62,7 @@ impl Default for TraceConfig {
             max_hops: 12,
             per_hop_wait_secs: 1,
             queries_per_hop: 1,
+            iface: None,
         }
     }
 }
@@ -102,8 +109,20 @@ fn apply_args(cmd: &mut Command, target: &str, cfg: &TraceConfig) {
         &cfg.max_hops.to_string(),
         "-w",
         &wait_ms.to_string(),
-        target,
     ]);
+    // Pin to the chosen NIC via its IPv4 source address — `tracert` has
+    // no `-i <iface>` flag, but `-S <srcaddr>` is the documented way to
+    // force probes out a specific adapter. We tolerate missing IPv4 /
+    // unknown iface silently: the trace still runs on the default route
+    // rather than failing the whole command for a UX-only preference.
+    if let Some(ref name) = cfg.iface {
+        if let Some(info) = crate::probes::iface::find_by_name(name) {
+            if let Some(ip) = info.ipv4.as_deref() {
+                cmd.args(["-S", ip]);
+            }
+        }
+    }
+    cmd.arg(target);
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -116,8 +135,18 @@ fn apply_args(cmd: &mut Command, target: &str, cfg: &TraceConfig) {
         &cfg.per_hop_wait_secs.to_string(),
         "-q",
         &cfg.queries_per_hop.to_string(),
-        target,
     ]);
+    // Pin to the chosen NIC. Both macOS and Linux `traceroute` accept
+    // `-i <iface>`; on macOS this is the BSD form (kernel iface name),
+    // on Linux likewise. We don't validate iface existence here — if
+    // the user pins a stale NIC the underlying binary will exit with
+    // the appropriate "unknown interface" error and the parser falls
+    // back to an empty hop list (caller already treats that as a UX
+    // "no hops resolved" state).
+    if let Some(ref name) = cfg.iface {
+        cmd.args(["-i", name.as_str()]);
+    }
+    cmd.arg(target);
 }
 
 /// Cross-platform parser. Each `traceroute` / `tracert` flavour has its

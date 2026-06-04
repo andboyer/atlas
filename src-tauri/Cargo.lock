@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "atlas"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -241,6 +241,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "socket2 0.5.10",
  "tauri",
  "tauri-build",

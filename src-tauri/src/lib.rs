@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod llm;
 mod monitor;
 mod narrator;
+mod ollama_install;
 pub mod oui;
 pub mod probes;
 mod process_util;
@@ -122,6 +123,9 @@ pub fn run() {
             commands::get_roaming_history,
             commands::export_report,
             commands::check_for_update,
+            ollama_install::check_ollama_status,
+            ollama_install::install_ollama,
+            ollama_install::launch_ollama,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -296,10 +296,41 @@ export interface Settings {
   watchlist: string[];
   pos_targets: string[];
   onboarding_complete: boolean;
-  /** Kernel name of the NIC AV-over-IP probes should pin to (e.g. `"en4"`).
-   *  Empty string means "let the kernel pick" (the previous behaviour). */
-  preferred_av_interface: string;
+  /** Kernel name of the NIC every iface-pinned probe binds to
+   *  (e.g. `"en4"`). Empty means "let the kernel pick" (the previous
+   *  behaviour). Read by AV diagnostics, the deep probes, and
+   *  traceroute. Wi-Fi-radio-bound probes (scan, channel map, RSSI)
+   *  ignore this — they always use the Wi-Fi adapter. */
+  preferred_interface: string;
 }
+
+/** Snapshot of the local Ollama daemon's health, returned by the
+ *  `check_ollama_status` Tauri command. Never errors — failures show up
+ *  as `reachable: false`. */
+export interface OllamaStatus {
+  /** True iff `<base_url>/api/version` answered 200 within ~1.5s. */
+  reachable: boolean;
+  /** Daemon version when reachable (e.g. `"0.30.4"`). */
+  version: string | null;
+  /** `ollama pull`-ed model names the daemon currently knows about. */
+  models: string[];
+  /** True iff the Ollama application is on disk — lets the UI tell
+   *  "installed but not running" apart from "not installed at all". */
+  app_installed: boolean;
+  /** Base URL we probed (mirrors the user's setting). */
+  base_url: string;
+}
+
+/** Streaming progress event for the `install_ollama` Tauri command.
+ *  Coalesced to ≤ 4 `progress` messages per second so the IPC channel
+ *  doesn't get flooded on fast connections. */
+export type InstallProgress =
+  | { kind: "starting"; url: string; total_bytes: number }
+  | { kind: "progress"; downloaded_bytes: number; total_bytes: number }
+  | { kind: "verifying"; expected: string; actual: string }
+  | { kind: "installing"; step: string }
+  | { kind: "done" }
+  | { kind: "failed"; message: string };
 
 /** One network interface returned by the `list_network_interfaces` Tauri
  *  command. The settings UI uses this to populate the AV NIC picker. */

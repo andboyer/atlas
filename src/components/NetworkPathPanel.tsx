@@ -11,6 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useShallow } from "zustand/react/shallow";
 import {
   Smartphone,
   Router,
@@ -21,6 +22,7 @@ import {
   RefreshCw,
   Info,
 } from "lucide-react";
+import { useApp } from "../store";
 import type { ReachabilityStats, TraceHop } from "../types";
 
 interface Props {
@@ -57,12 +59,21 @@ export function NetworkPathPanel({
   const [tracing, setTracing] = useState(false);
   const [traceError, setTraceError] = useState<string | null>(null);
 
+  // Pin the trace to whatever NIC the user selected in the header.
+  // Empty/whitespace → null (kernel default). We re-run automatically
+  // whenever the user changes the NIC so the route view never drifts
+  // from the rest of the iface-pinned probes.
+  const preferredIface = useApp(
+    useShallow((s) => (s.settings.preferred_interface || "").trim() || null),
+  );
+
   async function runTrace() {
     setTracing(true);
     setTraceError(null);
     try {
       const result = await invoke<TraceHop[]>("run_traceroute", {
         target: null,
+        iface: preferredIface,
       });
       setHops(result);
     } catch (e) {
@@ -75,7 +86,7 @@ export function NetworkPathPanel({
   useEffect(() => {
     void runTrace();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [preferredIface]);
 
   const hopStrip = [
     {

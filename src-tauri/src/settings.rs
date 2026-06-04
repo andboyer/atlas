@@ -34,13 +34,19 @@ pub struct Settings {
     #[serde(default)]
     pub onboarding_complete: bool,
 
-    /// Name of the NIC the AV-over-IP probes should pin themselves to
+    /// Kernel name of the NIC that diagnostic probes should pin to
     /// (`en0`, `en4`, …). Empty / unset means "let the kernel pick" — the
-    /// previous behaviour. Useful when the host is on Wi-Fi but the audio
-    /// VLAN only reaches a wired USB-Ethernet adapter, which is the common
-    /// AV troubleshooting case.
-    #[serde(default)]
-    pub preferred_av_interface: String,
+    /// previous behaviour. Used by AV-over-IP (mDNS browse, multicast
+    /// snapshot, link audit), the privileged deep probes (IGMP, PTP,
+    /// LLDP, SAP, DSCP), and `traceroute`. Wi-Fi-radio-bound probes
+    /// (channel map, RSSI sampling) always use the Wi-Fi adapter
+    /// regardless of this setting because that's the only NIC they can
+    /// physically read.
+    ///
+    /// `alias` keeps the historical key (`preferred_av_interface`) so
+    /// users who upgrade from <= v0.1.11 don't lose their pin.
+    #[serde(default, alias = "preferred_av_interface")]
+    pub preferred_interface: String,
 }
 
 impl Default for Settings {
@@ -64,7 +70,7 @@ impl Default for Settings {
             watchlist: vec![],
             pos_targets: vec![],
             onboarding_complete: false,
-            preferred_av_interface: String::new(),
+            preferred_interface: String::new(),
         }
     }
 }

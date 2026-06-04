@@ -49,12 +49,23 @@ function mediumSuffix(iface: NetworkInterfaceInfo): string {
   return "Unknown";
 }
 
-/** AV-tab NIC picker. Lives at the top of the AV-over-IP diagnostics
- *  tab (previously in the global header). Surfaces the medium of every
- *  candidate NIC and the medium of the currently-pinned NIC, so the
- *  user can immediately tell whether the diagnostics are about to
- *  inherit a Wi-Fi posture or a wired one. */
-export function AvInterfacePicker() {
+/** Global NIC picker. Lives in the top header (right of the brand,
+ *  before Export / Settings). The selected NIC is the iface every
+ *  iface-pinned probe in Atlas uses — AV-over-IP diagnostics, the
+ *  privileged deep probes (IGMP, PTP, LLDP, SAP, DSCP), and traceroute
+ *  all read `settings.preferred_interface`. Wi-Fi-radio-bound probes
+ *  (channel map, RSSI sampler) always use the Wi-Fi adapter regardless
+ *  of this pin because that's the only NIC they can physically read.
+ *
+ *  The picker exposes:
+ *    - the NIC + IPv4 + medium suffix inline in each <option>;
+ *    - a wired / Wi-Fi / unknown medium badge next to the selected
+ *      value, deliberately bold for Wi-Fi so the user notices the
+ *      moment they pin diagnostics to a wireless radio;
+ *    - a one-line footnote that explains what the current pick means
+ *      for downstream probes.
+ */
+export function NicPicker() {
   const { settings, saveSettings, settingsLoaded } = useApp(
     useShallow((s) => ({
       settings: s.settings,
@@ -91,7 +102,7 @@ export function AvInterfacePicker() {
     };
   }, []);
 
-  const current = settings.preferred_av_interface ?? "";
+  const current = settings.preferred_interface ?? "";
 
   const usable = useMemo(
     () => ifaces.filter((i) => i.is_physical && i.is_up && !i.is_loopback && !!i.ipv4),
@@ -108,7 +119,7 @@ export function AvInterfacePicker() {
     if (!settingsLoaded) return;
     setBusy(true);
     try {
-      await saveSettings({ ...settings, preferred_av_interface: value });
+      await saveSettings({ ...settings, preferred_interface: value });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -116,14 +127,14 @@ export function AvInterfacePicker() {
     }
   };
 
-  // Friendly hint that surfaces directly below the picker so the user
-  // understands what their current pick means for the rest of the tab.
+  // One-line footnote rendered under the picker so the user always
+  // knows what the current pick means for downstream probes.
   const hint = (() => {
     if (currentMissing) {
       return `"${current}" isn't present on this host right now. Reconnect the adapter or pick another.`;
     }
     if (!current) {
-      return "Auto lets the kernel pick the NIC — usually Wi-Fi on laptops. Pin a wired adapter for Dante / AES67.";
+      return "Auto: the kernel picks per its routing table — usually Wi-Fi on laptops. Pin a wired adapter for Dante / AES67.";
     }
     if (selected?.is_wireless === true) {
       return "Wi-Fi pin: diagnostics will assume the audio network is Wi-Fi. Dante/AES67 aren't supported on Wi-Fi.";
@@ -135,21 +146,22 @@ export function AvInterfacePicker() {
   })();
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)]/70 p-3">
-      <div className="flex flex-wrap items-center gap-3">
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-2">
         <label
-          htmlFor="av-iface"
-          className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]"
+          htmlFor="atlas-iface"
+          className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]"
         >
-          <Cable className="h-3.5 w-3.5" /> Diagnostics NIC
+          <Cable className="h-3.5 w-3.5" /> Atlas NIC
         </label>
         <select
-          id="av-iface"
+          id="atlas-iface"
           value={current}
           onChange={(e) => handleChange(e.target.value)}
           disabled={busy || !settingsLoaded}
-          className="min-w-[18rem] flex-1 cursor-pointer rounded border border-[var(--color-border)] bg-[var(--color-bg)]/60 px-2 py-1.5 text-sm font-mono text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] disabled:opacity-50"
-          aria-label="AV-over-IP network interface"
+          className="min-w-[14rem] max-w-[22rem] cursor-pointer rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)]/80 px-2.5 py-1.5 text-xs font-mono text-[var(--color-text)] transition-colors hover:border-[var(--color-accent)]/40 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] disabled:opacity-50"
+          aria-label="Atlas network interface (used by every iface-pinned probe)"
+          title="NIC every iface-pinned probe binds to (AV diagnostics, deep probes, traceroute). Wi-Fi scans always use the Wi-Fi radio."
         >
           <option value="">Auto (kernel default)</option>
           {usable.map((i) => (
@@ -164,11 +176,11 @@ export function AvInterfacePicker() {
         </select>
         <MediumBadge iface={selected} />
       </div>
-      <p className="mt-2 text-xs leading-snug text-[var(--color-muted)]">
+      <p className="max-w-[28rem] text-right text-[10px] leading-snug text-[var(--color-muted)]">
         {hint}
       </p>
       {error && (
-        <p className="mt-1 text-xs text-rose-300">AV NIC error: {error}</p>
+        <p className="text-[10px] text-rose-300">NIC error: {error}</p>
       )}
     </div>
   );
