@@ -1,0 +1,33 @@
+id: ptp-multiple-grandmasters
+name: Multiple PTP grandmasters detected
+category: ptp
+applies_to: [ptp, dante, aes67]
+description: >
+  Two or more PTP grandmasters are competing on the network. BMCA
+  reshuffles cause audio glitches on every election. Identifies who
+  is announcing and how to suppress competitors.
+symptoms:
+  - "multiple ptp grandmasters"
+  - "ptp election storm"
+  - "competing grandmasters"
+  - "ptp bmca instability"
+
+steps:
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 12 }
+    bind: ptp
+    fail_if: ptp.verdict == 'error'
+    on_fail: "PTP probe failed: {ptp.error}"
+    warn_if: ptp.competing_gm_observed == true || ptp.grandmaster_count > 1
+    warn_msg: "{ptp.grandmaster_count} grandmasters announcing across {ptp.domains} domain(s). Pick one to be authoritative; set priority1=128 on the rest (or disable PTP on them) so BMCA stops electing."
+
+  - id: lldp
+    tool: local.lldp_probe
+    args: { iface: "{nic}", duration_s: 35 }
+    bind: lldp
+    branch:
+      - when: lldp.verdict == 'switch_identified'
+        note: "Upstream switch identified — log into it and check which ports are sourcing PTP. Most managed switches (Cisco IOS-XE, Aruba CX, Extreme EXOS) can disable PTP per port to suppress unwanted grandmasters."
+      - when: lldp.verdict == 'silent' || lldp.verdict == 'not_supported'
+        note: "Could not identify upstream switch via LLDP/CDP. To find which physical ports are sourcing competing grandmasters, log into each managed switch and run `show ptp interface` (Cisco) / `show ptp port` (Aruba)."

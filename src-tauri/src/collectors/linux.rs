@@ -113,7 +113,10 @@ fn parse_iw_channel(info: &str) -> (Option<u32>, Option<u32>, Option<String>) {
             continue;
         }
         // channel number
-        let channel = t.split_whitespace().nth(1).and_then(|v| v.parse::<u32>().ok());
+        let channel = t
+            .split_whitespace()
+            .nth(1)
+            .and_then(|v| v.parse::<u32>().ok());
 
         // frequency in MHz — between '(' and ' MHz)'
         let freq_mhz: Option<u32> = t

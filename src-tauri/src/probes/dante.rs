@@ -98,24 +98,22 @@ pub fn browse_blocking(window: Duration, pin_iface: Option<&str>) -> Vec<DanteDe
             while let Ok(event) = rx.recv_timeout(Duration::from_millis(1)) {
                 got_any = true;
                 if let ServiceEvent::ServiceResolved(info) = event {
-                    let hostname = info
-                        .get_hostname()
-                        .trim_end_matches('.')
-                        .to_lowercase();
+                    let hostname = info.get_hostname().trim_end_matches('.').to_lowercase();
                     let svc = info
                         .get_type()
                         .trim_end_matches('.')
                         .trim_end_matches(".local")
                         .to_string();
 
-                    let entry = by_hostname.entry(hostname.clone()).or_insert_with(|| {
-                        Observation {
-                            hostname: hostname.clone(),
-                            addresses: vec![],
-                            services: vec![],
-                            props: HashMap::new(),
-                        }
-                    });
+                    let entry =
+                        by_hostname
+                            .entry(hostname.clone())
+                            .or_insert_with(|| Observation {
+                                hostname: hostname.clone(),
+                                addresses: vec![],
+                                services: vec![],
+                                props: HashMap::new(),
+                            });
 
                     for addr in info.get_addresses() {
                         let s = addr.to_string();
@@ -157,7 +155,10 @@ pub fn browse_blocking(window: Duration, pin_iface: Option<&str>) -> Vec<DanteDe
         // 169.254/16 addresses unless that's all we have.
         let mut addrs = obs.addresses.clone();
         addrs.sort();
-        let mut non_ll: Vec<&String> = addrs.iter().filter(|a| !a.starts_with("169.254.")).collect();
+        let mut non_ll: Vec<&String> = addrs
+            .iter()
+            .filter(|a| !a.starts_with("169.254."))
+            .collect();
         if non_ll.is_empty() {
             non_ll = addrs.iter().collect();
         }
@@ -197,7 +198,11 @@ pub fn browse_blocking(window: Duration, pin_iface: Option<&str>) -> Vec<DanteDe
             // Heuristic fallback: many Dante hostnames embed the model name.
             .or_else(|| derive_model_from_hostname(&obs.hostname));
 
-        let manufacturer = obs.props.get("mf").cloned().or_else(|| obs.props.get("manufacturer").cloned());
+        let manufacturer = obs
+            .props
+            .get("mf")
+            .cloned()
+            .or_else(|| obs.props.get("manufacturer").cloned());
 
         let tx_channels = parse_chan_count(&obs.props, "tx");
         let rx_channels = parse_chan_count(&obs.props, "rx");
@@ -217,7 +222,7 @@ pub fn browse_blocking(window: Duration, pin_iface: Option<&str>) -> Vec<DanteDe
             redundancy,
             on_interface: None, // backfilled by the orchestrator using addr_to_iface
             control_ports_open: Vec::new(), // backfilled by TCP probe
-            on_wifi: false, // backfilled by Wi-Fi cross-ref
+            on_wifi: false,     // backfilled by Wi-Fi cross-ref
         });
     }
     out.sort_by(|a, b| a.ip.cmp(&b.ip));

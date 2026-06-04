@@ -69,7 +69,10 @@ fn parse_netsh_interfaces(s: &str) -> LinkStats {
     });
 
     let wifi_generation = derive_generation(phy_mode.as_deref(), band.as_deref());
-    let vendor = bssid.as_deref().and_then(crate::oui::lookup).map(|s| s.to_string());
+    let vendor = bssid
+        .as_deref()
+        .and_then(crate::oui::lookup)
+        .map(|s| s.to_string());
 
     LinkStats {
         ssid,

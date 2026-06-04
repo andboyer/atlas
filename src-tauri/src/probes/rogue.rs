@@ -65,9 +65,9 @@ pub fn detect(nearby: &[NearbyAp]) -> Vec<RogueApFinding> {
         // (2) Mixed security among secured APs (e.g. WPA2 + WPA3 personal).
         if security_modes.len() > 1 {
             // WPA2/WPA3 transition mode is legitimate — skip if that's the only mix.
-            let only_wpa_transition = security_modes
-                .iter()
-                .all(|m| m.starts_with("WPA2") || m.starts_with("WPA3") || m.starts_with("WPA/WPA2"));
+            let only_wpa_transition = security_modes.iter().all(|m| {
+                m.starts_with("WPA2") || m.starts_with("WPA3") || m.starts_with("WPA/WPA2")
+            });
             if !only_wpa_transition {
                 findings.push(RogueApFinding {
                     ssid: ssid.clone(),
@@ -181,7 +181,12 @@ mod tests {
     #[test]
     fn detects_open_plus_secured_evil_twin() {
         let nearby = vec![
-            ap("CoffeeShop", "aa:bb:cc:11:22:33", Some("WPA2 Personal"), "2.4"),
+            ap(
+                "CoffeeShop",
+                "aa:bb:cc:11:22:33",
+                Some("WPA2 Personal"),
+                "2.4",
+            ),
             ap("CoffeeShop", "00:11:22:33:44:55", Some("None"), "2.4"),
         ];
         let findings = detect(&nearby);
@@ -193,7 +198,12 @@ mod tests {
     #[test]
     fn ignores_wpa2_wpa3_transition_mode() {
         let nearby = vec![
-            ap("HomeWiFi", "aa:bb:cc:11:22:33", Some("WPA2/WPA3 Personal"), "5"),
+            ap(
+                "HomeWiFi",
+                "aa:bb:cc:11:22:33",
+                Some("WPA2/WPA3 Personal"),
+                "5",
+            ),
             ap("HomeWiFi", "aa:bb:cc:11:22:34", Some("WPA3 Personal"), "5"),
         ];
         let findings = detect(&nearby);

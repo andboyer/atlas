@@ -1,0 +1,31 @@
+id: multicast-flooding
+name: Multicast flooding suspected
+category: multicast
+applies_to: [dante, aes67, multicast]
+description: >
+  Multicast frames are being flooded to every port (instead of forwarded
+  only to subscribed ports). Causes high background traffic, switch
+  CPU spikes, and dropouts on unrelated devices. Symptom of: IGMP
+  snooping disabled, no IGMP querier, or a 224.0.0.0/24 link-local
+  flow (which is intentionally flooded by spec).
+symptoms:
+  - "multicast flooding"
+  - "every device sees every dante flow"
+  - "switch cpu high from multicast"
+
+steps:
+  - id: mcast
+    tool: local.multicast_groups
+    args: { iface: "{nic}" }
+    bind: mcast
+    warn_if: mcast.group_count > 30
+    warn_msg: "{mcast.group_count} multicast groups joined on {nic} — abnormally high count. If this NIC is on an AV VLAN where it should only see its own subscribed flows, the switch is flooding."
+
+  - id: igmp
+    tool: local.igmp_listen
+    args: { iface: "{nic}", duration_s: 35 }
+    bind: igmp
+    note_if: igmp.verdict == 'not_implemented'
+    note_msg: "IGMP listener is not yet shipped — check IGMP snooping state from the switch CLI: `show ip igmp snooping` (Cisco) and confirm it is enabled on the AV VLAN with a querier IP listed."
+    warn_if: igmp.verdict == 'no_querier_observed'
+    warn_msg: "No IGMP querier observed — without one, snooping silently disables itself and multicast is flooded everywhere."

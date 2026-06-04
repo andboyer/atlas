@@ -123,24 +123,42 @@ mod tests {
 
     #[test]
     fn higher_better_improves_when_delta_positive() {
-        assert_eq!(classify(8.0, 30.0, TrendDirection::HigherIsBetter), DIR_IMPROVED);
-        assert_eq!(classify(-8.0, 30.0, TrendDirection::HigherIsBetter), DIR_DEGRADED);
+        assert_eq!(
+            classify(8.0, 30.0, TrendDirection::HigherIsBetter),
+            DIR_IMPROVED
+        );
+        assert_eq!(
+            classify(-8.0, 30.0, TrendDirection::HigherIsBetter),
+            DIR_DEGRADED
+        );
     }
 
     #[test]
     fn lower_better_improves_when_delta_negative() {
-        assert_eq!(classify(-15.0, 50.0, TrendDirection::LowerIsBetter), DIR_IMPROVED);
-        assert_eq!(classify(15.0, 50.0, TrendDirection::LowerIsBetter), DIR_DEGRADED);
+        assert_eq!(
+            classify(-15.0, 50.0, TrendDirection::LowerIsBetter),
+            DIR_IMPROVED
+        );
+        assert_eq!(
+            classify(15.0, 50.0, TrendDirection::LowerIsBetter),
+            DIR_DEGRADED
+        );
     }
 
     #[test]
     fn small_change_is_stable() {
-        assert_eq!(classify(1.0, 100.0, TrendDirection::HigherIsBetter), DIR_STABLE);
+        assert_eq!(
+            classify(1.0, 100.0, TrendDirection::HigherIsBetter),
+            DIR_STABLE
+        );
     }
 
     #[test]
     fn absolute_floor_protects_near_zero() {
         // avg = 1, threshold floor = 2, so delta of 1.5 must still be stable.
-        assert_eq!(classify(1.5, 1.0, TrendDirection::HigherIsBetter), DIR_STABLE);
+        assert_eq!(
+            classify(1.5, 1.0, TrendDirection::HigherIsBetter),
+            DIR_STABLE
+        );
     }
 }

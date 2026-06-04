@@ -23,7 +23,8 @@ fn build_prompt(scan: &ScanResult, history: Option<&MetricHistory>) -> String {
     let reach = &scan.reachability;
 
     let mut lines = vec![
-        "You are an expert network engineer helping a small-business owner or IT admin.".to_string(),
+        "You are an expert network engineer helping a small-business owner or IT admin."
+            .to_string(),
         "Below is a structured WiFi diagnostic, including bufferbloat, channel".to_string(),
         "interference, PHY-rate efficiency, roaming history, and (if present)".to_string(),
         "potential rogue APs. Explain each finding in plain language, give 2-3".to_string(),
@@ -31,22 +32,79 @@ fn build_prompt(scan: &ScanResult, history: Option<&MetricHistory>) -> String {
         String::new(),
         "## WiFi Link".to_string(),
         format!("  Band: {}", link.band.as_deref().unwrap_or("unknown")),
-        format!("  Channel: {} ({} MHz)",
-            link.channel.map(|c| c.to_string()).unwrap_or_else(|| "n/a".into()),
-            link.channel_width_mhz.map(|w| w.to_string()).unwrap_or_else(|| "n/a".into())),
-        format!("  PHY mode: {}", link.phy_mode.as_deref().unwrap_or("unknown")),
-        format!("  Wi-Fi generation: {}", link.wifi_generation.as_deref().unwrap_or("unknown")),
-        format!("  AP vendor (OUI): {}", link.vendor.as_deref().unwrap_or("unknown")),
-        format!("  Security: {}", link.security.as_deref().unwrap_or("unknown")),
-        format!("  RSSI: {} dBm", link.rssi_dbm.map(|v| v.to_string()).unwrap_or_else(|| "n/a".to_string())),
-        format!("  SNR: {} dB", link.snr_db.map(|v| v.to_string()).unwrap_or_else(|| "n/a".to_string())),
-        format!("  Tx rate: {} Mbps", link.tx_rate_mbps.map(|v| format!("{v:.0}")).unwrap_or_else(|| "n/a".to_string())),
+        format!(
+            "  Channel: {} ({} MHz)",
+            link.channel
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "n/a".into()),
+            link.channel_width_mhz
+                .map(|w| w.to_string())
+                .unwrap_or_else(|| "n/a".into())
+        ),
+        format!(
+            "  PHY mode: {}",
+            link.phy_mode.as_deref().unwrap_or("unknown")
+        ),
+        format!(
+            "  Wi-Fi generation: {}",
+            link.wifi_generation.as_deref().unwrap_or("unknown")
+        ),
+        format!(
+            "  AP vendor (OUI): {}",
+            link.vendor.as_deref().unwrap_or("unknown")
+        ),
+        format!(
+            "  Security: {}",
+            link.security.as_deref().unwrap_or("unknown")
+        ),
+        format!(
+            "  RSSI: {} dBm",
+            link.rssi_dbm
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "n/a".to_string())
+        ),
+        format!(
+            "  SNR: {} dB",
+            link.snr_db
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "n/a".to_string())
+        ),
+        format!(
+            "  Tx rate: {} Mbps",
+            link.tx_rate_mbps
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_else(|| "n/a".to_string())
+        ),
         String::new(),
         "## Reachability".to_string(),
-        format!("  Gateway latency: {} ms", reach.gateway_latency_ms.map(|v| format!("{v:.1}")).unwrap_or_else(|| "n/a".to_string())),
-        format!("  Internet latency: {} ms", reach.internet_latency_ms.map(|v| format!("{v:.1}")).unwrap_or_else(|| "n/a".to_string())),
-        format!("  DNS latency: {} ms", reach.dns_latency_ms.map(|v| format!("{v:.1}")).unwrap_or_else(|| "n/a".to_string())),
-        format!("  Packet loss: {}%", reach.packet_loss_pct.map(|v| format!("{v:.1}")).unwrap_or_else(|| "n/a".to_string())),
+        format!(
+            "  Gateway latency: {} ms",
+            reach
+                .gateway_latency_ms
+                .map(|v| format!("{v:.1}"))
+                .unwrap_or_else(|| "n/a".to_string())
+        ),
+        format!(
+            "  Internet latency: {} ms",
+            reach
+                .internet_latency_ms
+                .map(|v| format!("{v:.1}"))
+                .unwrap_or_else(|| "n/a".to_string())
+        ),
+        format!(
+            "  DNS latency: {} ms",
+            reach
+                .dns_latency_ms
+                .map(|v| format!("{v:.1}"))
+                .unwrap_or_else(|| "n/a".to_string())
+        ),
+        format!(
+            "  Packet loss: {}%",
+            reach
+                .packet_loss_pct
+                .map(|v| format!("{v:.1}"))
+                .unwrap_or_else(|| "n/a".to_string())
+        ),
     ];
 
     if let Some(speed) = scan.speed_mbps {
@@ -101,7 +159,9 @@ fn build_prompt(scan: &ScanResult, history: Option<&MetricHistory>) -> String {
         lines.push(String::new());
         lines.push("## Channel interference".to_string());
         if let Some(score) = intf.current_channel_score {
-            lines.push(format!("  Current channel score: {score:.0}/100 (lower is better)"));
+            lines.push(format!(
+                "  Current channel score: {score:.0}/100 (lower is better)"
+            ));
         }
         if let Some(ch) = intf.recommended_24 {
             lines.push(format!("  Recommended 2.4 GHz channel: {ch}"));
@@ -111,11 +171,20 @@ fn build_prompt(scan: &ScanResult, history: Option<&MetricHistory>) -> String {
         }
         // Top 3 most-congested channels for context.
         let mut sorted = intf.channels.clone();
-        sorted.sort_by(|a, b| b.interference_score.partial_cmp(&a.interference_score).unwrap());
+        sorted.sort_by(|a, b| {
+            b.interference_score
+                .partial_cmp(&a.interference_score)
+                .unwrap()
+        });
         let worst: Vec<String> = sorted
             .iter()
             .take(3)
-            .map(|c| format!("ch {} ({} GHz, {:.0})", c.channel, c.band, c.interference_score))
+            .map(|c| {
+                format!(
+                    "ch {} ({} GHz, {:.0})",
+                    c.channel, c.band, c.interference_score
+                )
+            })
             .collect();
         if !worst.is_empty() {
             lines.push(format!("  Most congested: {}", worst.join(", ")));
@@ -160,7 +229,10 @@ fn build_prompt(scan: &ScanResult, history: Option<&MetricHistory>) -> String {
         if let Some(ip) = &w.public_ipv6 {
             lines.push(format!("  Public IPv6: {ip}"));
         }
-        lines.push(format!("  Dual-stack (v4+v6): {}", if w.dual_stack { "yes" } else { "no" }));
+        lines.push(format!(
+            "  Dual-stack (v4+v6): {}",
+            if w.dual_stack { "yes" } else { "no" }
+        ));
         if let Some(isp) = &w.isp {
             let asn = w.asn.map(|a| format!(" (AS{a})")).unwrap_or_default();
             lines.push(format!("  ISP: {isp}{asn}"));
@@ -336,14 +408,25 @@ struct OaiChoiceMessage {
     content: String,
 }
 
-async fn call_openai(api_key: &str, model: &str, base_url: Option<&str>, messages: &[ChatMessage]) -> Result<String> {
+async fn call_openai(
+    api_key: &str,
+    model: &str,
+    base_url: Option<&str>,
+    messages: &[ChatMessage],
+) -> Result<String> {
     let url = format!(
         "{}/v1/chat/completions",
         base_url.unwrap_or("https://api.openai.com")
     );
     let body = OaiRequest {
         model,
-        messages: messages.iter().map(|m| OaiMessageOwned { role: m.role.clone(), content: m.content.clone() }).collect(),
+        messages: messages
+            .iter()
+            .map(|m| OaiMessageOwned {
+                role: m.role.clone(),
+                content: m.content.clone(),
+            })
+            .collect(),
         max_tokens: 800,
         temperature: 0.4,
     };
@@ -402,7 +485,10 @@ async fn call_anthropic(api_key: &str, model: &str, messages: &[ChatMessage]) ->
     let chat_messages: Vec<AnthropicMessageOwned> = messages
         .iter()
         .filter(|m| m.role != "system")
-        .map(|m| AnthropicMessageOwned { role: m.role.clone(), content: m.content.clone() })
+        .map(|m| AnthropicMessageOwned {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        })
         .collect();
 
     let body = AnthropicRequest {
@@ -435,7 +521,10 @@ async fn call_anthropic(api_key: &str, model: &str, messages: &[ChatMessage]) ->
 
 /// Build the chat messages list for a one-shot diagnostic explanation.
 fn explain_messages(scan: &ScanResult, history: Option<&MetricHistory>) -> Vec<ChatMessage> {
-    vec![ChatMessage { role: "user".into(), content: build_prompt(scan, history) }]
+    vec![ChatMessage {
+        role: "user".into(),
+        content: build_prompt(scan, history),
+    }]
 }
 
 /// Build the system message that embeds diagnostic context for interactive chat.
@@ -444,7 +533,10 @@ fn chat_system_message(scan: &ScanResult, history: Option<&MetricHistory>) -> Ch
     sys.push_str("Here is the current diagnostic context:\n\n");
     sys.push_str(&build_prompt(scan, history));
     sys.push_str("\n\nAnswer the user's follow-up questions concisely and precisely, referencing the above data.");
-    ChatMessage { role: "system".into(), content: sys }
+    ChatMessage {
+        role: "system".into(),
+        content: sys,
+    }
 }
 
 /// Public wrapper around [`dispatch`] for callers outside this module that
@@ -464,7 +556,13 @@ pub async fn dispatch_public(
 /// Ollama exposes an OpenAI-compatible endpoint at `<base_url>/v1/chat/completions`,
 /// so we reuse `call_openai` for it. The bearer token is ignored by the Ollama
 /// server; we pass an empty string when no key is configured.
-async fn dispatch(provider: &str, api_key: &str, model: &str, base_url: Option<&str>, messages: &[ChatMessage]) -> Result<String> {
+async fn dispatch(
+    provider: &str,
+    api_key: &str,
+    model: &str,
+    base_url: Option<&str>,
+    messages: &[ChatMessage],
+) -> Result<String> {
     match provider {
         "anthropic" => call_anthropic(api_key, model, messages).await,
         "ollama" => {
@@ -541,7 +639,10 @@ pub async fn radio_insights(
 ) -> Result<String> {
     let prompt = build_radio_prompt(scan);
     tracing::debug!("LLM radio_insights ({} chars)", prompt.len());
-    let messages = vec![ChatMessage { role: "user".into(), content: prompt }];
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: prompt,
+    }];
     dispatch(provider, api_key, model, base_url, &messages).await
 }
 
@@ -552,9 +653,12 @@ fn build_radio_prompt(scan: &ScanResult) -> String {
     let link = &scan.link;
     let mut lines = vec![
         "You are an expert WiFi RF engineer.".to_string(),
-        "Analyze the radio data below and identify concrete issues AND specific suggestions.".to_string(),
-        "Focus ONLY on radio / airspace topics: band, channel, channel width, RSSI, SNR,".to_string(),
-        "PHY efficiency, neighbor congestion, co-channel overlap, roaming behavior, and rogue APs.".to_string(),
+        "Analyze the radio data below and identify concrete issues AND specific suggestions."
+            .to_string(),
+        "Focus ONLY on radio / airspace topics: band, channel, channel width, RSSI, SNR,"
+            .to_string(),
+        "PHY efficiency, neighbor congestion, co-channel overlap, roaming behavior, and rogue APs."
+            .to_string(),
         "Ignore DNS, captive portal, MTU, or upstream/ISP issues.".to_string(),
         String::new(),
         "## Current link".to_string(),
@@ -562,16 +666,30 @@ fn build_radio_prompt(scan: &ScanResult) -> String {
         format!(
             "  Band/channel/width: {} / {} / {} MHz",
             link.band.as_deref().unwrap_or("?"),
-            link.channel.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
-            link.channel_width_mhz.map(|w| w.to_string()).unwrap_or_else(|| "?".into()),
+            link.channel
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".into()),
+            link.channel_width_mhz
+                .map(|w| w.to_string())
+                .unwrap_or_else(|| "?".into()),
         ),
-        format!("  PHY mode: {} ({})",
+        format!(
+            "  PHY mode: {} ({})",
             link.phy_mode.as_deref().unwrap_or("?"),
-            link.wifi_generation.as_deref().unwrap_or("?")),
-        format!("  RSSI: {} dBm  SNR: {} dB  Tx rate: {} Mbps",
-            link.rssi_dbm.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
-            link.snr_db.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
-            link.tx_rate_mbps.map(|v| format!("{v:.0}")).unwrap_or_else(|| "?".into())),
+            link.wifi_generation.as_deref().unwrap_or("?")
+        ),
+        format!(
+            "  RSSI: {} dBm  SNR: {} dB  Tx rate: {} Mbps",
+            link.rssi_dbm
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into()),
+            link.snr_db
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into()),
+            link.tx_rate_mbps
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_else(|| "?".into())
+        ),
         format!("  AP vendor: {}", link.vendor.as_deref().unwrap_or("?")),
         format!("  Security: {}", link.security.as_deref().unwrap_or("?")),
     ];
@@ -582,7 +700,10 @@ fn build_radio_prompt(scan: &ScanResult) -> String {
         lines.push("## PHY-rate efficiency".to_string());
         lines.push(format!(
             "  Actual {:.0} / Theoretical {:.0} Mbps = {:.0}% ({})",
-            p.actual_mbps, p.theoretical_max_mbps, p.efficiency * 100.0, p.grade,
+            p.actual_mbps,
+            p.theoretical_max_mbps,
+            p.efficiency * 100.0,
+            p.grade,
         ));
         lines.push(format!("  Diagnostic: {}", p.diagnostic));
     }
@@ -592,7 +713,9 @@ fn build_radio_prompt(scan: &ScanResult) -> String {
         lines.push(String::new());
         lines.push("## Channel interference (rules-engine view)".to_string());
         if let Some(s) = intf.current_channel_score {
-            lines.push(format!("  Current channel score: {s:.0}/100 (lower is better)"));
+            lines.push(format!(
+                "  Current channel score: {s:.0}/100 (lower is better)"
+            ));
         }
         if let Some(ch) = intf.recommended_24 {
             lines.push(format!("  Recommended 2.4 GHz channel: {ch}"));
@@ -601,7 +724,11 @@ fn build_radio_prompt(scan: &ScanResult) -> String {
             lines.push(format!("  Recommended 5 GHz channel: {ch}"));
         }
         let mut sorted = intf.channels.clone();
-        sorted.sort_by(|a, b| b.interference_score.partial_cmp(&a.interference_score).unwrap());
+        sorted.sort_by(|a, b| {
+            b.interference_score
+                .partial_cmp(&a.interference_score)
+                .unwrap()
+        });
         for c in sorted.iter().take(5) {
             lines.push(format!(
                 "  ch {} ({} GHz): score {:.0}",
@@ -613,15 +740,27 @@ fn build_radio_prompt(scan: &ScanResult) -> String {
     // Nearby APs — the strongest 10, since RSSI dictates congestion impact.
     if !scan.nearby_aps.is_empty() {
         lines.push(String::new());
-        lines.push(format!("## Nearby APs ({} total — top 10 by RSSI shown)", scan.nearby_aps.len()));
+        lines.push(format!(
+            "## Nearby APs ({} total — top 10 by RSSI shown)",
+            scan.nearby_aps.len()
+        ));
         let mut sorted = scan.nearby_aps.clone();
-        sorted.sort_by(|a, b| b.rssi_dbm.unwrap_or(-127).cmp(&a.rssi_dbm.unwrap_or(-127)));
+        sorted.sort_by_key(|a| -a.rssi_dbm.unwrap_or(-127));
         for ap in sorted.iter().take(10) {
             let ssid = ap.ssid.as_deref().unwrap_or("<hidden>");
             let band = ap.band.as_deref().unwrap_or("?");
-            let ch = ap.channel.map(|c| c.to_string()).unwrap_or_else(|| "?".into());
-            let width = ap.width_mhz.map(|w| format!("{w}MHz")).unwrap_or_else(|| "?".into());
-            let rssi = ap.rssi_dbm.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+            let ch = ap
+                .channel
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".into());
+            let width = ap
+                .width_mhz
+                .map(|w| format!("{w}MHz"))
+                .unwrap_or_else(|| "?".into());
+            let rssi = ap
+                .rssi_dbm
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into());
             let phy = ap.phy_mode.as_deref().unwrap_or("?");
             lines.push(format!(
                 "  '{ssid}' — {band}GHz ch{ch} {width} {phy} @ {rssi} dBm",
@@ -699,7 +838,10 @@ pub async fn av_insights(
 ) -> Result<String> {
     let prompt = build_av_prompt(av, scan);
     tracing::debug!("LLM av_insights ({} chars)", prompt.len());
-    let messages = vec![ChatMessage { role: "user".into(), content: prompt }];
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: prompt,
+    }];
     dispatch(provider, api_key, model, base_url, &messages).await
 }
 
@@ -712,7 +854,8 @@ fn build_av_prompt(av: &AvDiagnosticsResult, scan: Option<&ScanResult>) -> Strin
     let mut lines = vec![
         "You are an expert AV-over-IP network engineer specialising in Dante,".to_string(),
         "AES67, multicast / IGMP snooping, and IEEE 1588 PTP synchronisation.".to_string(),
-        "Analyze the snapshot below and enumerate concrete issues AND specific suggestions.".to_string(),
+        "Analyze the snapshot below and enumerate concrete issues AND specific suggestions."
+            .to_string(),
         "Focus on: Dante device health, sample-rate/latency alignment, redundancy,".to_string(),
         "multicast plumbing (IGMP querier presence, snooping, switch forwarding),".to_string(),
         "PTP master / sync quality, AV-on-Wi-Fi anti-patterns, and DSCP/QoS markings.".to_string(),
@@ -729,7 +872,9 @@ fn build_av_prompt(av: &AvDiagnosticsResult, scan: Option<&ScanResult>) -> Strin
         if let Some(igmp) = &dp.igmp {
             lines.push(format!(
                 "  Deep IGMP probe: verdict='{}', queriers={}, reports={}",
-                igmp.verdict, igmp.queriers_seen.len(), igmp.reports_seen,
+                igmp.verdict,
+                igmp.queriers_seen.len(),
+                igmp.reports_seen,
             ));
         }
     }
@@ -742,14 +887,26 @@ fn build_av_prompt(av: &AvDiagnosticsResult, scan: Option<&ScanResult>) -> Strin
             "  SSID: '{}'  band/ch/width: {}/{}/{} MHz  vendor: {}",
             s.link.ssid.as_deref().unwrap_or("?"),
             s.link.band.as_deref().unwrap_or("?"),
-            s.link.channel.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
-            s.link.channel_width_mhz.map(|w| w.to_string()).unwrap_or_else(|| "?".into()),
+            s.link
+                .channel
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".into()),
+            s.link
+                .channel_width_mhz
+                .map(|w| w.to_string())
+                .unwrap_or_else(|| "?".into()),
             s.link.vendor.as_deref().unwrap_or("?"),
         ));
         lines.push(format!(
             "  RSSI: {} dBm  SNR: {} dB",
-            s.link.rssi_dbm.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
-            s.link.snr_db.map(|v| v.to_string()).unwrap_or_else(|| "?".into()),
+            s.link
+                .rssi_dbm
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into()),
+            s.link
+                .snr_db
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "?".into()),
         ));
     }
 
@@ -848,7 +1005,10 @@ pub async fn chat_query(
 ) -> Result<String> {
     let mut messages = vec![chat_system_message(scan, metric_history)];
     messages.extend(history);
-    messages.push(ChatMessage { role: "user".into(), content: question.to_string() });
+    messages.push(ChatMessage {
+        role: "user".into(),
+        content: question.to_string(),
+    });
     tracing::debug!("LLM chat ({} msgs)", messages.len());
     dispatch(provider, api_key, model, base_url, &messages).await
 }
@@ -874,11 +1034,17 @@ mod tests {
             started_at: Utc::now(),
             finished_at: Utc::now(),
             link: LinkStats {
-                ssid: None, bssid: None, band: Some("5".to_string()),
-                channel: Some(36), channel_width_mhz: Some(80),
-                rssi_dbm: Some(-55), noise_dbm: Some(-95),
-                snr_db: Some(40), tx_rate_mbps: Some(400.0),
-                rx_rate_mbps: None, security: Some("WPA2".to_string()),
+                ssid: None,
+                bssid: None,
+                band: Some("5".to_string()),
+                channel: Some(36),
+                channel_width_mhz: Some(80),
+                rssi_dbm: Some(-55),
+                noise_dbm: Some(-95),
+                snr_db: Some(40),
+                tx_rate_mbps: Some(400.0),
+                rx_rate_mbps: None,
+                security: Some("WPA2".to_string()),
                 phy_mode: Some("802.11ac".to_string()),
                 wifi_generation: Some("Wi-Fi 5".to_string()),
                 vendor: None,
@@ -1007,9 +1173,24 @@ mod tests {
         let history: MetricHistory = vec![(
             "RSSI (dBm)".into(),
             vec![
-                MetricSample { metric: "link.rssi_dbm".into(), value: -55.0, sampled_at: now, label: None },
-                MetricSample { metric: "link.rssi_dbm".into(), value: -60.0, sampled_at: now, label: None },
-                MetricSample { metric: "link.rssi_dbm".into(), value: -75.0, sampled_at: now, label: None },
+                MetricSample {
+                    metric: "link.rssi_dbm".into(),
+                    value: -55.0,
+                    sampled_at: now,
+                    label: None,
+                },
+                MetricSample {
+                    metric: "link.rssi_dbm".into(),
+                    value: -60.0,
+                    sampled_at: now,
+                    label: None,
+                },
+                MetricSample {
+                    metric: "link.rssi_dbm".into(),
+                    value: -75.0,
+                    sampled_at: now,
+                    label: None,
+                },
             ],
         )];
         let prompt = build_prompt(&scan, Some(&history));

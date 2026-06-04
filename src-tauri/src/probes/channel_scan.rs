@@ -54,20 +54,16 @@ async fn scan_platform() -> Result<Vec<NearbyAp>> {
             .output(),
     )
     .await??;
-    Ok(parse_system_profiler_networks(
-        &String::from_utf8_lossy(&out.stdout),
-    ))
+    Ok(parse_system_profiler_networks(&String::from_utf8_lossy(
+        &out.stdout,
+    )))
 }
 
 #[cfg(target_os = "linux")]
 async fn scan_platform() -> Result<Vec<NearbyAp>> {
     use tokio::time::{timeout, Duration};
     // Detect the wireless interface.
-    let iface_out = Command::new("iw")
-        .no_console()
-        .arg("dev")
-        .output()
-        .await?;
+    let iface_out = Command::new("iw").no_console().arg("dev").output().await?;
     let iface_text = String::from_utf8_lossy(&iface_out.stdout).into_owned();
     let iface = iface_text
         .lines()
@@ -223,7 +219,11 @@ fn parse_system_profiler_networks(s: &str) -> Vec<NearbyAp> {
             } else if let Some(v) = trimmed.strip_prefix("Signal / Noise: ") {
                 // e.g. "-71 dBm / -94 dBm"
                 if let Some(rssi_part) = v.split('/').next() {
-                    ap.rssi_dbm = rssi_part.trim().trim_end_matches(" dBm").parse::<i32>().ok();
+                    ap.rssi_dbm = rssi_part
+                        .trim()
+                        .trim_end_matches(" dBm")
+                        .parse::<i32>()
+                        .ok();
                 }
             } else if let Some(v) = trimmed.strip_prefix("Security: ") {
                 ap.security = Some(v.to_string());
@@ -272,13 +272,23 @@ fn parse_iw_scan(s: &str) -> Vec<NearbyAp> {
             if let Some(v) = t.strip_prefix("SSID: ") {
                 ap.ssid = Some(v.to_string());
             } else if t.starts_with("DS Parameter set: channel") {
-                let ch = t.split_whitespace().last().and_then(|v| v.parse::<u32>().ok());
+                let ch = t
+                    .split_whitespace()
+                    .last()
+                    .and_then(|v| v.parse::<u32>().ok());
                 ap.channel = ch;
-                ap.band = ch.map(|n| if n <= 14 { "2.4".to_string() } else { "5".to_string() });
-            } else if let Some(v) = t.strip_prefix("signal: ") {
-                ap.rssi_dbm = v.split_whitespace().next().and_then(|v| {
-                    v.parse::<f32>().ok().map(|f| f as i32)
+                ap.band = ch.map(|n| {
+                    if n <= 14 {
+                        "2.4".to_string()
+                    } else {
+                        "5".to_string()
+                    }
                 });
+            } else if let Some(v) = t.strip_prefix("signal: ") {
+                ap.rssi_dbm = v
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<f32>().ok().map(|f| f as i32));
             }
         }
     }
@@ -321,18 +331,20 @@ fn parse_netsh_scan(s: &str) -> Vec<NearbyAp> {
             } else if t.starts_with("Signal") {
                 let pct = t
                     .find(':')
-                    .and_then(|i| {
-                        t[i + 1..]
-                            .trim()
-                            .trim_end_matches('%')
-                            .parse::<i32>()
-                            .ok()
-                    });
+                    .and_then(|i| t[i + 1..].trim().trim_end_matches('%').parse::<i32>().ok());
                 ap.rssi_dbm = pct.map(|p| (p / 2) - 100);
             } else if t.starts_with("Channel") {
-                let ch = t.find(':').and_then(|i| t[i + 1..].trim().parse::<u32>().ok());
+                let ch = t
+                    .find(':')
+                    .and_then(|i| t[i + 1..].trim().parse::<u32>().ok());
                 ap.channel = ch;
-                ap.band = ch.map(|n| if n <= 14 { "2.4".to_string() } else { "5".to_string() });
+                ap.band = ch.map(|n| {
+                    if n <= 14 {
+                        "2.4".to_string()
+                    } else {
+                        "5".to_string()
+                    }
+                });
             }
         }
     }
@@ -373,11 +385,11 @@ mod tests {
 
     #[test]
     fn adjacent_channel_24ghz() {
-        assert!(is_adjacent_channel_24(6, 4));  // diff = 2 → overlap
-        assert!(is_adjacent_channel_24(6, 8));  // diff = 2 → overlap
-        assert!(is_adjacent_channel_24(1, 4));  // diff = 3 → overlap
+        assert!(is_adjacent_channel_24(6, 4)); // diff = 2 → overlap
+        assert!(is_adjacent_channel_24(6, 8)); // diff = 2 → overlap
+        assert!(is_adjacent_channel_24(1, 4)); // diff = 3 → overlap
         assert!(!is_adjacent_channel_24(1, 6)); // diff = 5 → non-overlapping
-        assert!(!is_adjacent_channel_24(1, 11));// diff = 10 → non-overlapping
+        assert!(!is_adjacent_channel_24(1, 11)); // diff = 10 → non-overlapping
         assert!(!is_adjacent_channel_24(6, 6)); // same → co-channel, not adjacent
     }
 

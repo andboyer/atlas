@@ -60,25 +60,13 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
     // monitor surfaces gateway / latency from the operator-chosen NIC,
     // not whichever default route wins right now.
     let pinned_iface = crate::commands::resolved_iface(&state, None);
-    let reach = collector
-        .reachability(pinned_iface.as_deref())
-        .await
-        .ok()?;
+    let reach = collector.reachability(pinned_iface.as_deref()).await.ok()?;
 
     let settings = Settings::load(&state.settings_path).unwrap_or_default();
     let profile = crate::commands::profile_hints_from(&settings);
     let targets = crate::commands::effective_targets(&settings);
 
-    let (
-        mut devices,
-        services,
-        captive_portal,
-        dns_leak,
-        mtu_bytes,
-        nearby_aps,
-        speed_mbps,
-        wan,
-    ) = tokio::join!(
+    let (mut devices, services, captive_portal, dns_leak, mtu_bytes, nearby_aps, speed_mbps, wan) = tokio::join!(
         crate::discovery::scan::discover_and_probe(),
         crate::probes::services::probe_services(&targets),
         crate::probes::captive::is_captive_portal(),
@@ -105,13 +93,10 @@ async fn run_scan(app: &AppHandle) -> Option<ScanResult> {
         .as_deref()
         .and_then(crate::oui::lookup)
         .map(str::to_string);
-    link.wifi_generation = crate::wifi_gen::wifi_generation(
-        link.phy_mode.as_deref(),
-        link.band.as_deref(),
-    );
+    link.wifi_generation =
+        crate::wifi_gen::wifi_generation(link.phy_mode.as_deref(), link.band.as_deref());
 
-    let anomalies: Vec<AnomalySignal> =
-        detect::anomaly::compute_anomalies(&state.store);
+    let anomalies: Vec<AnomalySignal> = detect::anomaly::compute_anomalies(&state.store);
 
     let findings = detect::evaluate(&Context {
         link: &link,
@@ -227,7 +212,11 @@ fn maybe_notify(app: &AppHandle, result: &ScanResult) {
         let body = if result.findings.len() == 1 {
             finding.title.clone()
         } else {
-            format!("{} and {} other issue(s)", finding.title, result.findings.len() - 1)
+            format!(
+                "{} and {} other issue(s)",
+                finding.title,
+                result.findings.len() - 1
+            )
         };
 
         if let Err(e) = app

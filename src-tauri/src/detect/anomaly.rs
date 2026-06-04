@@ -67,11 +67,10 @@ fn ewma_z(values: &[f64]) -> Option<(f64, f64)> {
 pub fn compute_anomalies(store: &Store) -> Vec<AnomalySignal> {
     let mut out = Vec::new();
     for &(metric, min_samples) in TRACKED {
-        let samples: Vec<MetricSample> =
-            match store.recent_metric_samples(metric, HISTORY_LIMIT) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
+        let samples: Vec<MetricSample> = match store.recent_metric_samples(metric, HISTORY_LIMIT) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
         if samples.len() < min_samples {
             continue;
         }

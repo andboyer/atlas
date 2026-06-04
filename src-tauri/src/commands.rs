@@ -2,7 +2,10 @@ use crate::collectors::default_collector;
 use crate::detect::{self, AnomalySignal, Context};
 use crate::settings::Settings;
 use crate::store::{DeviceEvent, IncidentCorrelation, MetricSample, ScanSummary, Store};
-use crate::types::{AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, ScanResult, StressTestResult};
+use crate::types::{
+    AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, ScanResult,
+    StressTestResult,
+};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -88,10 +91,13 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
         // tile reflects that NIC's next-hop instead of whichever default
         // route currently wins the kernel's metric tie-break.
         let pinned_iface = resolved_iface(&state, None);
-        let reach = timed("reachability", collector.reachability(pinned_iface.as_deref()))
-            .await
-            .ok_or_else(|| "reachability timed out".to_string())?
-            .map_err(|e| format!("reachability: {e}"))?;
+        let reach = timed(
+            "reachability",
+            collector.reachability(pinned_iface.as_deref()),
+        )
+        .await
+        .ok_or_else(|| "reachability timed out".to_string())?
+        .map_err(|e| format!("reachability: {e}"))?;
 
         // Load settings to drive profile-specific behaviour.
         let settings = Settings::load(&state.settings_path).unwrap_or_default();
@@ -114,12 +120,18 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
             wan_opt,
         ) = tokio::join!(
             timed("discover", crate::discovery::scan::discover_and_probe()),
-            timed("services", crate::probes::services::probe_services(&targets)),
+            timed(
+                "services",
+                crate::probes::services::probe_services(&targets)
+            ),
             timed("captive", crate::probes::captive::is_captive_portal()),
             timed("dns_leak", crate::probes::dns_leak::is_dns_leak()),
             timed("mtu", crate::probes::mtu::discover_mtu()),
             timed("channel_scan", crate::probes::channel_scan::scan_nearby()),
-            timed("speed_test", crate::probes::speed_test::measure_download_mbps()),
+            timed(
+                "speed_test",
+                crate::probes::speed_test::measure_download_mbps()
+            ),
             timed("wan", crate::probes::wan::probe_wan()),
         );
 
@@ -144,18 +156,15 @@ pub async fn run_quick_scan(state: State<'_, AppState>) -> Result<ScanResult, St
             .as_deref()
             .and_then(crate::oui::lookup)
             .map(str::to_string);
-        link.wifi_generation = crate::wifi_gen::wifi_generation(
-            link.phy_mode.as_deref(),
-            link.band.as_deref(),
-        );
+        link.wifi_generation =
+            crate::wifi_gen::wifi_generation(link.phy_mode.as_deref(), link.band.as_deref());
 
         if devices.is_empty() {
             devices = demo_devices();
         }
 
         // Anomaly detection reads from persisted samples (empty on first scan).
-        let anomalies: Vec<AnomalySignal> =
-            detect::anomaly::compute_anomalies(&state.store);
+        let anomalies: Vec<AnomalySignal> = detect::anomaly::compute_anomalies(&state.store);
 
         let findings = detect::evaluate(&Context {
             link: &link,
@@ -363,10 +372,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 #[tauri::command]
-pub async fn update_settings(
-    state: State<'_, AppState>,
-    settings: Settings,
-) -> Result<(), String> {
+pub async fn update_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     settings
         .save(&state.settings_path)
         .map_err(|e| e.to_string())
@@ -666,7 +672,10 @@ pub async fn chat_query(
 
     let llm_history: Vec<crate::llm::ChatMessage> = history
         .into_iter()
-        .map(|m| crate::llm::ChatMessage { role: m.role, content: m.content })
+        .map(|m| crate::llm::ChatMessage {
+            role: m.role,
+            content: m.content,
+        })
         .collect();
 
     let metric_history = collect_metric_history(&state.store);
@@ -766,10 +775,7 @@ pub async fn get_roaming_history(
 }
 
 #[tauri::command]
-pub async fn export_report(
-    state: State<'_, AppState>,
-    run_id: String,
-) -> Result<String, String> {
+pub async fn export_report(state: State<'_, AppState>, run_id: String) -> Result<String, String> {
     let scan = state
         .store
         .get_scan_full(&run_id)
@@ -901,7 +907,10 @@ fn render_html_report(
         }
     }
     fn opt_fmt<T, F: Fn(&T) -> String>(v: &Option<T>, f: F) -> String {
-        v.as_ref().map(f).map(|s| html_escape(&s)).unwrap_or_default()
+        v.as_ref()
+            .map(f)
+            .map(|s| html_escape(&s))
+            .unwrap_or_default()
     }
 
     let severity_color = |s: &crate::types::Severity| match s {
@@ -1092,14 +1101,16 @@ fn render_html_report(
     let telemetry_html: String = if samples.is_empty() {
         String::new()
     } else {
-        let rssi_spark = render_sparkline(
+        let rssi_spark =
+            render_sparkline(samples, |s| s.rssi_dbm.map(|v| v as f64), "#60a5fa", "dBm");
+        let gw_spark =
+            render_sparkline(samples, |s| s.gateway_ms.map(|v| v as f64), "#34d399", "ms");
+        let net_spark = render_sparkline(
             samples,
-            |s| s.rssi_dbm.map(|v| v as f64),
-            "#60a5fa",
-            "dBm",
+            |s| s.internet_ms.map(|v| v as f64),
+            "#fbbf24",
+            "ms",
         );
-        let gw_spark = render_sparkline(samples, |s| s.gateway_ms.map(|v| v as f64), "#34d399", "ms");
-        let net_spark = render_sparkline(samples, |s| s.internet_ms.map(|v| v as f64), "#fbbf24", "ms");
         let dns_spark = render_sparkline(samples, |s| s.dns_ms.map(|v| v as f64), "#a78bfa", "ms");
         format!(
             r#"<h2>Live telemetry (last {n} samples)</h2>
@@ -1171,7 +1182,10 @@ fn render_html_report(
                 )
             })
             .collect();
-        format!("<h2>Causal narratives ({n})</h2>{cards}", n = narratives.len())
+        format!(
+            "<h2>Causal narratives ({n})</h2>{cards}",
+            n = narratives.len()
+        )
     };
 
     // ── Wi-Fi system events ───────────────────────────────────────────────
@@ -1213,12 +1227,21 @@ fn render_html_report(
             ("Vendor (OUI)", opt_str(&link.vendor)),
             ("Band", opt_str(&link.band)),
             ("Channel", opt_str(&link.channel)),
-            ("Channel width", opt_fmt(&link.channel_width_mhz, |v| format!("{v} MHz"))),
+            (
+                "Channel width",
+                opt_fmt(&link.channel_width_mhz, |v| format!("{v} MHz")),
+            ),
             ("RSSI", opt_fmt(&link.rssi_dbm, |v| format!("{v} dBm"))),
             ("Noise", opt_fmt(&link.noise_dbm, |v| format!("{v} dBm"))),
             ("SNR", opt_fmt(&link.snr_db, |v| format!("{v} dB"))),
-            ("TX rate", opt_fmt(&link.tx_rate_mbps, |v| format!("{v:.1} Mb/s"))),
-            ("RX rate", opt_fmt(&link.rx_rate_mbps, |v| format!("{v:.1} Mb/s"))),
+            (
+                "TX rate",
+                opt_fmt(&link.tx_rate_mbps, |v| format!("{v:.1} Mb/s")),
+            ),
+            (
+                "RX rate",
+                opt_fmt(&link.rx_rate_mbps, |v| format!("{v:.1} Mb/s")),
+            ),
             ("Security", opt_str(&link.security)),
             ("PHY mode", opt_str(&link.phy_mode)),
             ("Wi-Fi generation", opt_str(&link.wifi_generation)),
@@ -1236,13 +1259,29 @@ fn render_html_report(
     let reach_html: String = {
         let rows = [
             ("Gateway IP", opt_str(&reach.gateway_ip)),
-            ("Gateway latency", opt_fmt(&reach.gateway_latency_ms, |v| format!("{v:.1} ms"))),
-            ("Internet latency", opt_fmt(&reach.internet_latency_ms, |v| format!("{v:.1} ms"))),
-            ("DNS latency", opt_fmt(&reach.dns_latency_ms, |v| format!("{v:.1} ms"))),
-            ("Packet loss", opt_fmt(&reach.packet_loss_pct, |v| format!("{v:.1}%"))),
+            (
+                "Gateway latency",
+                opt_fmt(&reach.gateway_latency_ms, |v| format!("{v:.1} ms")),
+            ),
+            (
+                "Internet latency",
+                opt_fmt(&reach.internet_latency_ms, |v| format!("{v:.1} ms")),
+            ),
+            (
+                "DNS latency",
+                opt_fmt(&reach.dns_latency_ms, |v| format!("{v:.1} ms")),
+            ),
+            (
+                "Packet loss",
+                opt_fmt(&reach.packet_loss_pct, |v| format!("{v:.1}%")),
+            ),
         ];
         let body = dl_table(&rows);
-        if body.is_empty() { String::new() } else { format!("<h2>Reachability</h2>{body}") }
+        if body.is_empty() {
+            String::new()
+        } else {
+            format!("<h2>Reachability</h2>{body}")
+        }
     };
 
     // ── Connection extras (DNS leak, MTU, speed) ──────────────────────────
@@ -1250,13 +1289,27 @@ fn render_html_report(
         let rows = [
             (
                 "DNS leak",
-                if scan.dns_leak { "<span style=\"color:#ef4444\">⚠ detected</span>".to_string() } else { "—".to_string() },
+                if scan.dns_leak {
+                    "<span style=\"color:#ef4444\">⚠ detected</span>".to_string()
+                } else {
+                    "—".to_string()
+                },
             ),
-            ("Path MTU", opt_fmt(&scan.mtu_bytes, |v| format!("{v} bytes"))),
-            ("Throughput", opt_fmt(&scan.speed_mbps, |v| format!("{v:.1} Mb/s"))),
+            (
+                "Path MTU",
+                opt_fmt(&scan.mtu_bytes, |v| format!("{v} bytes")),
+            ),
+            (
+                "Throughput",
+                opt_fmt(&scan.speed_mbps, |v| format!("{v:.1} Mb/s")),
+            ),
         ];
         let body = dl_table(&rows);
-        if body.is_empty() { String::new() } else { format!("<h2>Connection extras</h2>{body}") }
+        if body.is_empty() {
+            String::new()
+        } else {
+            format!("<h2>Connection extras</h2>{body}")
+        }
     };
 
     // ── WAN / ISP ─────────────────────────────────────────────────────────
@@ -1266,14 +1319,25 @@ fn render_html_report(
             let rows = [
                 ("Public IPv4", opt_str(&w.public_ipv4)),
                 ("Public IPv6", opt_str(&w.public_ipv6)),
-                ("Dual-stack", if w.dual_stack { "yes".into() } else { "no".into() }),
+                (
+                    "Dual-stack",
+                    if w.dual_stack {
+                        "yes".into()
+                    } else {
+                        "no".into()
+                    },
+                ),
                 ("ASN", opt_fmt(&w.asn, |v| format!("AS{v}"))),
                 ("ISP", opt_str(&w.isp)),
                 ("Country", opt_str(&w.country)),
                 ("Region", opt_str(&w.region)),
             ];
             let body = dl_table(&rows);
-            if body.is_empty() { String::new() } else { format!("<h2>WAN / ISP</h2>{body}") }
+            if body.is_empty() {
+                String::new()
+            } else {
+                format!("<h2>WAN / ISP</h2>{body}")
+            }
         }
     };
 
@@ -1282,14 +1346,30 @@ fn render_html_report(
         None => String::new(),
         Some(q) => {
             let rows = [
-                ("Downlink throughput", opt_fmt(&q.dl_throughput_mbps, |v| format!("{v:.1} Mb/s"))),
-                ("Uplink throughput", opt_fmt(&q.ul_throughput_mbps, |v| format!("{v:.1} Mb/s"))),
-                ("Responsiveness", opt_fmt(&q.responsiveness_rpm, |v| format!("{v} RPM"))),
+                (
+                    "Downlink throughput",
+                    opt_fmt(&q.dl_throughput_mbps, |v| format!("{v:.1} Mb/s")),
+                ),
+                (
+                    "Uplink throughput",
+                    opt_fmt(&q.ul_throughput_mbps, |v| format!("{v:.1} Mb/s")),
+                ),
+                (
+                    "Responsiveness",
+                    opt_fmt(&q.responsiveness_rpm, |v| format!("{v} RPM")),
+                ),
                 ("Responsiveness label", opt_str(&q.responsiveness_label)),
-                ("Idle latency", opt_fmt(&q.idle_latency_ms, |v| format!("{v:.1} ms"))),
+                (
+                    "Idle latency",
+                    opt_fmt(&q.idle_latency_ms, |v| format!("{v:.1} ms")),
+                ),
             ];
             let body = dl_table(&rows);
-            if body.is_empty() { String::new() } else { format!("<h2>Quality / bufferbloat</h2>{body}") }
+            if body.is_empty() {
+                String::new()
+            } else {
+                format!("<h2>Quality / bufferbloat</h2>{body}")
+            }
         }
     };
 
@@ -1297,8 +1377,14 @@ fn render_html_report(
     let interference_html: String = match &scan.interference {
         None => String::new(),
         Some(ir) => {
-            let rec_24 = ir.recommended_24.map(|v| v.to_string()).unwrap_or_else(|| "—".into());
-            let rec_5 = ir.recommended_5.map(|v| v.to_string()).unwrap_or_else(|| "—".into());
+            let rec_24 = ir
+                .recommended_24
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "—".into());
+            let rec_5 = ir
+                .recommended_5
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "—".into());
             let cur = ir
                 .current_channel_score
                 .map(|v| format!("{v:.0}"))
@@ -1340,7 +1426,10 @@ fn render_html_report(
             let pct = (p.efficiency * 100.0).round();
             let rows = [
                 ("PHY mode", html_escape(&p.phy_mode)),
-                ("Theoretical max", format!("{:.0} Mb/s", p.theoretical_max_mbps)),
+                (
+                    "Theoretical max",
+                    format!("{:.0} Mb/s", p.theoretical_max_mbps),
+                ),
                 ("Actual TX rate", format!("{:.0} Mb/s", p.actual_mbps)),
                 ("Efficiency", format!("{pct:.0}%")),
                 ("Grade", html_escape(&p.grade)),
@@ -1441,8 +1530,15 @@ fn render_html_report(
                 alt_b = html_escape(&a.alternate_bssid),
                 alt_r = a.alternate_rssi_dbm,
                 imp = a.improvement_db,
-                ch = a.alternate_channel.map(|v| format!(" · ch {v}")).unwrap_or_default(),
-                band = a.alternate_band.as_deref().map(|b| format!(" · {}", html_escape(b))).unwrap_or_default(),
+                ch = a
+                    .alternate_channel
+                    .map(|v| format!(" · ch {v}"))
+                    .unwrap_or_default(),
+                band = a
+                    .alternate_band
+                    .as_deref()
+                    .map(|b| format!(" · {}", html_escape(b)))
+                    .unwrap_or_default(),
             )
         }
     };
@@ -1759,15 +1855,46 @@ fn render_html_report(
                 let issues = if la.issues.is_empty() {
                     String::new()
                 } else {
-                    let items: String = la.issues.iter().map(|i| format!("<li>{}</li>", html_escape(i))).collect();
+                    let items: String = la
+                        .issues
+                        .iter()
+                        .map(|i| format!("<li>{}</li>", html_escape(i)))
+                        .collect();
                     format!("<p style=\"margin:4px 0\">Issues:</p><ul>{items}</ul>")
                 };
                 let rows = [
-                    ("Link speed", opt_fmt(&la.link_speed_mbps, |v| format!("{v} Mb/s"))),
+                    (
+                        "Link speed",
+                        opt_fmt(&la.link_speed_mbps, |v| format!("{v} Mb/s")),
+                    ),
                     ("Duplex", opt_str(&la.duplex)),
-                    ("EEE enabled", opt_fmt(&la.eee_enabled, |v| if *v { "yes".into() } else { "no".into() })),
-                    ("Flow control RX", opt_fmt(&la.flow_control_rx, |v| if *v { "yes".into() } else { "no".into() })),
-                    ("Flow control TX", opt_fmt(&la.flow_control_tx, |v| if *v { "yes".into() } else { "no".into() })),
+                    (
+                        "EEE enabled",
+                        opt_fmt(
+                            &la.eee_enabled,
+                            |v| if *v { "yes".into() } else { "no".into() },
+                        ),
+                    ),
+                    (
+                        "Flow control RX",
+                        opt_fmt(&la.flow_control_rx, |v| {
+                            if *v {
+                                "yes".into()
+                            } else {
+                                "no".into()
+                            }
+                        }),
+                    ),
+                    (
+                        "Flow control TX",
+                        opt_fmt(&la.flow_control_tx, |v| {
+                            if *v {
+                                "yes".into()
+                            } else {
+                                "no".into()
+                            }
+                        }),
+                    ),
                     ("MTU", opt_fmt(&la.mtu, |v| format!("{v} bytes"))),
                 ];
                 let body = dl_table(&rows);
@@ -1866,7 +1993,10 @@ fn render_html_report(
                 )
             })
             .collect();
-        format!("<h2>Active stress tests ({n})</h2>{cards}", n = stress_results.len())
+        format!(
+            "<h2>Active stress tests ({n})</h2>{cards}",
+            n = stress_results.len()
+        )
     };
 
     format!(
@@ -2018,7 +2148,11 @@ fn render_html_report(
         recs_section = if scan.recommendations.is_empty() {
             String::new()
         } else {
-            format!("<h2>Recommendations ({})</h2>{}", scan.recommendations.len(), recs_html)
+            format!(
+                "<h2>Recommendations ({})</h2>{}",
+                scan.recommendations.len(),
+                recs_html
+            )
         },
         wifi_events = wifi_events_html,
         av = av_html,
@@ -2166,7 +2300,10 @@ pub async fn list_network_interfaces(
 /// `None`. Shared by AV diagnostics, the deep probes, and traceroute so
 /// every iface-pinned subsystem sees the same NIC the user picked in
 /// the global header.
-pub(crate) fn resolved_iface(state: &State<'_, AppState>, explicit: Option<&str>) -> Option<String> {
+pub(crate) fn resolved_iface(
+    state: &State<'_, AppState>,
+    explicit: Option<&str>,
+) -> Option<String> {
     let normalise = |s: &str| {
         let t = s.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("auto") {
@@ -2221,22 +2358,19 @@ pub async fn run_deep_probes(
         }
         "ptp-listen" => {
             let i = iface.clone();
-            let ptp = tokio::task::spawn_blocking(move || {
-                crate::probes::ptp::run_blocking(&i, 12)
-            })
-            .await
-            .map_err(|e| format!("ptp join: {e}"))?;
+            let ptp = tokio::task::spawn_blocking(move || crate::probes::ptp::run_blocking(&i, 12))
+                .await
+                .map_err(|e| format!("ptp join: {e}"))?;
             out.ptp = Some(ptp);
         }
         "dscp-audit" => {
             #[cfg(unix)]
             {
                 let i = iface.clone();
-                let dscp = tokio::task::spawn_blocking(move || {
-                    crate::probes::dscp::run_blocking(&i, 12)
-                })
-                .await
-                .map_err(|e| format!("dscp join: {e}"))?;
+                let dscp =
+                    tokio::task::spawn_blocking(move || crate::probes::dscp::run_blocking(&i, 12))
+                        .await
+                        .map_err(|e| format!("dscp join: {e}"))?;
                 out.dscp = Some(dscp);
             }
             #[cfg(windows)]
@@ -2250,29 +2384,25 @@ pub async fn run_deep_probes(
         "lldp-listen" => {
             // ARP+OUI fallback runs unprivileged on every platform.
             let i = iface.clone();
-            let lldp = tokio::task::spawn_blocking(move || {
-                crate::probes::lldp::run_blocking(&i, 12)
-            })
-            .await
-            .map_err(|e| format!("lldp join: {e}"))?;
+            let lldp =
+                tokio::task::spawn_blocking(move || crate::probes::lldp::run_blocking(&i, 12))
+                    .await
+                    .map_err(|e| format!("lldp join: {e}"))?;
             out.lldp = Some(lldp);
         }
         "link-audit" => {
             let i = iface.clone();
-            let link = tokio::task::spawn_blocking(move || {
-                crate::probes::linkaudit::run_blocking(&i)
-            })
-            .await
-            .map_err(|e| format!("linkaudit join: {e}"))?;
+            let link =
+                tokio::task::spawn_blocking(move || crate::probes::linkaudit::run_blocking(&i))
+                    .await
+                    .map_err(|e| format!("linkaudit join: {e}"))?;
             out.link_audit = Some(link);
         }
         "sap-listen" => {
             let i = iface.clone();
-            let sap = tokio::task::spawn_blocking(move || {
-                crate::probes::sap::run_blocking(&i, 8)
-            })
-            .await
-            .map_err(|e| format!("sap join: {e}"))?;
+            let sap = tokio::task::spawn_blocking(move || crate::probes::sap::run_blocking(&i, 8))
+                .await
+                .map_err(|e| format!("sap join: {e}"))?;
             out.sap = Some(sap);
         }
         "all" => {
@@ -2280,21 +2410,17 @@ pub async fn run_deep_probes(
             // all privileged probes into a single elevated dispatch so
             // the operator sees at most ONE auth prompt.
             let i = iface.clone();
-            let ptp_h = tokio::task::spawn_blocking(move || {
-                crate::probes::ptp::run_blocking(&i, 12)
-            });
+            let ptp_h =
+                tokio::task::spawn_blocking(move || crate::probes::ptp::run_blocking(&i, 12));
             let i = iface.clone();
-            let sap_h = tokio::task::spawn_blocking(move || {
-                crate::probes::sap::run_blocking(&i, 8)
-            });
+            let sap_h =
+                tokio::task::spawn_blocking(move || crate::probes::sap::run_blocking(&i, 8));
             let i = iface.clone();
-            let link_h = tokio::task::spawn_blocking(move || {
-                crate::probes::linkaudit::run_blocking(&i)
-            });
+            let link_h =
+                tokio::task::spawn_blocking(move || crate::probes::linkaudit::run_blocking(&i));
             let i = iface.clone();
-            let lldp_h = tokio::task::spawn_blocking(move || {
-                crate::probes::lldp::run_blocking(&i, 12)
-            });
+            let lldp_h =
+                tokio::task::spawn_blocking(move || crate::probes::lldp::run_blocking(&i, 12));
             #[cfg(unix)]
             let dscp_h = {
                 let i = iface.clone();
@@ -2411,9 +2537,7 @@ async fn elevate_and_run_probe(
     {
         return Err(format!("invalid probe kind: {probe_kind}"));
     }
-    let shell_cmd = format!(
-        "\"{escaped}\" --probe {probe_kind} --iface {iface} --secs {secs}"
-    );
+    let shell_cmd = format!("\"{escaped}\" --probe {probe_kind} --iface {iface} --secs {secs}");
     let apple_script = format!(
         "do shell script \"{}\" with administrator privileges",
         shell_cmd.replace('\\', "\\\\").replace('"', "\\\"")
@@ -2498,10 +2622,7 @@ async fn elevate_and_run_probe(
 ) -> Result<String, String> {
     // Stdout can't cross an elevation boundary in Win32, so route the
     // helper's JSON through a unique temp file we read after -Wait.
-    let out_path = std::env::temp_dir().join(format!(
-        "atlas-probe-{}.json",
-        uuid::Uuid::new_v4()
-    ));
+    let out_path = std::env::temp_dir().join(format!("atlas-probe-{}.json", uuid::Uuid::new_v4()));
     let out_path_str = out_path.to_string_lossy().into_owned();
     let ps_quote = |s: &str| s.replace('\'', "''");
     let secs_str = secs.to_string();
@@ -2605,6 +2726,170 @@ pub async fn av_insights(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+// ── Runbook engine commands ──────────────────────────────────────────────────
+
+/// Brief shape returned to the UI so the operator can pick a runbook
+/// without having to load every step body.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct RunbookSummary {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub applies_to: Vec<String>,
+    pub symptoms: Vec<String>,
+    pub step_count: usize,
+}
+
+fn summarise(rb: &crate::runbook::Runbook) -> RunbookSummary {
+    RunbookSummary {
+        id: rb.id.clone(),
+        name: rb.name.clone(),
+        category: rb.category.clone(),
+        description: rb.description.clone(),
+        applies_to: rb.applies_to.clone(),
+        symptoms: rb.symptoms.clone(),
+        step_count: rb.steps.len(),
+    }
+}
+
+/// List every bundled runbook (no engine instance required — the library
+/// is parsed at startup inside `Engine::new`).
+#[tauri::command]
+pub async fn list_runbooks() -> Result<Vec<RunbookSummary>, String> {
+    let engine = crate::runbook::engine::Engine::new(None);
+    Ok(engine.list_runbooks().into_iter().map(summarise).collect())
+}
+
+/// Heuristic best-match runbook for a free-form symptom string. Falls back
+/// to the LLM picker when no heuristic match is good enough AND the LLM
+/// is configured.
+#[tauri::command]
+pub async fn pick_runbook(
+    state: State<'_, AppState>,
+    symptom: String,
+) -> Result<Option<RunbookSummary>, String> {
+    let engine = crate::runbook::engine::Engine::new(None);
+    let books = engine.list_runbooks();
+    let needle = symptom.to_lowercase();
+
+    // Heuristic: substring match against `symptoms` and `description`.
+    let mut best: Option<(i32, &crate::runbook::Runbook)> = None;
+    for rb in &books {
+        let mut score = 0i32;
+        for s in &rb.symptoms {
+            if needle.contains(&s.to_lowercase()) || s.to_lowercase().contains(&needle) {
+                score += 5;
+            }
+        }
+        if rb.description.to_lowercase().contains(&needle) {
+            score += 2;
+        }
+        if rb.name.to_lowercase().contains(&needle) {
+            score += 3;
+        }
+        if score > 0 && best.map(|(s, _)| score > s).unwrap_or(true) {
+            best = Some((score, rb));
+        }
+    }
+    if let Some((_, rb)) = best {
+        return Ok(Some(summarise(rb)));
+    }
+
+    // LLM fallback (best-effort).
+    let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
+    let provider = settings.llm_provider.as_deref().unwrap_or("ollama");
+    let key = match resolve_api_key(provider, settings.llm_api_key.clone()) {
+        Ok(k) => k,
+        Err(_) => return Ok(None),
+    };
+    let model = settings
+        .llm_model
+        .clone()
+        .unwrap_or_else(|| default_model(provider));
+    let base_url = resolve_base_url(provider, settings.llm_base_url.clone());
+    let catalog: String = books
+        .iter()
+        .map(|rb| format!("- {}: {} ({})", rb.id, rb.name, rb.symptoms.join("; ")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt = format!(
+        "Pick the SINGLE most relevant runbook id for the user's symptom. \
+         Reply with only the id, nothing else. If nothing fits, reply `none`.\n\n\
+         Symptom: {symptom}\n\nCatalog:\n{catalog}\n"
+    );
+    let messages = vec![crate::llm::ChatMessage {
+        role: "user".into(),
+        content: prompt,
+    }];
+    let reply =
+        match crate::llm::dispatch_public(provider, &key, &model, base_url.as_deref(), &messages)
+            .await
+        {
+            Ok(r) => r.trim().to_lowercase(),
+            Err(_) => return Ok(None),
+        };
+    Ok(books
+        .iter()
+        .find(|rb| reply.contains(&rb.id))
+        .map(|rb| summarise(rb)))
+}
+
+/// Execute a runbook end-to-end. Emits `runbook-event` events through the
+/// app handle for live transcript rendering; returns the full execution
+/// when complete.
+#[tauri::command]
+pub async fn run_runbook(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    runbook_id: String,
+    iface: Option<String>,
+) -> Result<crate::runbook::RunbookExecution, String> {
+    use tauri::Emitter;
+
+    let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
+    let provider = settings.llm_provider.as_deref().unwrap_or("ollama");
+    // Narration is best-effort — fall back to None when no key is set.
+    let llm_cfg = match resolve_api_key(provider, settings.llm_api_key.clone()) {
+        Ok(api_key) => {
+            let model = settings
+                .llm_model
+                .clone()
+                .unwrap_or_else(|| default_model(provider));
+            let base_url = resolve_base_url(provider, settings.llm_base_url.clone());
+            Some(crate::runbook::engine::LlmConfig {
+                provider: provider.into(),
+                api_key,
+                model,
+                base_url,
+            })
+        }
+        Err(_) => None,
+    };
+
+    let pinned = resolved_iface(&state, iface.as_deref());
+    let inputs = crate::runbook::engine::ExecutionInputs {
+        pinned_iface: pinned,
+        variables: std::collections::BTreeMap::new(),
+    };
+
+    let engine = crate::runbook::engine::Engine::new(llm_cfg);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::runbook::RunbookEvent>();
+
+    // Fan-out the channel to Tauri events on a background task.
+    let app2 = app.clone();
+    let pump = tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            let _ = app2.emit("runbook-event", &ev);
+        }
+    });
+
+    let result = engine.run(&runbook_id, inputs, Some(tx)).await;
+    // Closing tx by dropping it (engine.run consumed it) lets pump drain and exit.
+    let _ = pump.await;
+    result
 }
 
 #[cfg(all(test, target_os = "windows"))]

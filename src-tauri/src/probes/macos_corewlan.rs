@@ -87,9 +87,7 @@ pub fn scan_blocking() -> Result<Vec<NearbyAp>> {
                 }
             };
 
-            let bssid = bssid_raw
-                .map(|s| s.to_string())
-                .filter(|s| !s.is_empty());
+            let bssid = bssid_raw.map(|s| s.to_string()).filter(|s| !s.is_empty());
 
             let (channel, band, width_mhz) = match channel_obj {
                 Some(c) => {

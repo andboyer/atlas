@@ -38,28 +38,9 @@ use crate::probes::iface as iface_probe;
 use crate::types::{LldpNeighbor, LldpProbeResult};
 
 const SWITCH_VENDOR_KEYWORDS: &[&str] = &[
-    "cisco",
-    "aruba",
-    "ubiquiti",
-    "meraki",
-    "ruckus",
-    "hpe",
-    "hewlett",
-    "juniper",
-    "extreme",
-    "netgear",
-    "tp-link",
-    "tplink",
-    "huawei",
-    "dell",
-    "brocade",
-    "mikrotik",
-    "fortinet",
-    "luxul",
-    "zyxel",
-    "linksys",
-    "edgecore",
-    "arista",
+    "cisco", "aruba", "ubiquiti", "meraki", "ruckus", "hpe", "hewlett", "juniper", "extreme",
+    "netgear", "tp-link", "tplink", "huawei", "dell", "brocade", "mikrotik", "fortinet", "luxul",
+    "zyxel", "linksys", "edgecore", "arista",
 ];
 
 /// Synchronous blocking entrypoint — call from `tokio::task::spawn_blocking`.
@@ -91,8 +72,7 @@ pub fn run_blocking(iface: &str, listen_secs: u32) -> LldpProbeResult {
     #[cfg(target_os = "windows")]
     let raw = enum_arp_windows();
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    let raw: Result<Vec<(String, String)>, String> =
-        Err("platform not supported".to_string());
+    let raw: Result<Vec<(String, String)>, String> = Err("platform not supported".to_string());
 
     let entries = match raw {
         Ok(v) => v,

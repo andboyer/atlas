@@ -335,7 +335,10 @@ fn populate_windows(iface: &str, r: &mut LinkAuditResult) {
 #[cfg(target_os = "windows")]
 fn parse_windows_speed(s: &str) -> Option<u32> {
     let lower = s.to_ascii_lowercase();
-    let num: String = lower.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    let num: String = lower
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     let n: f64 = num.parse().ok()?;
     if lower.contains("gbps") || lower.contains("gb/s") {
         Some((n * 1000.0) as u32)

@@ -1,0 +1,36 @@
+id: ptp-jittery-sync
+name: Jittery PTP sync
+category: ptp
+applies_to: [ptp, dante, aes67]
+description: >
+  PTP grandmaster is stable but Sync messages are arriving with high
+  jitter. Usually caused by EEE on a NIC/switch, an L3 hop without a
+  hardware PTP boundary clock, or QoS misconfiguration.
+symptoms:
+  - "ptp jitter high"
+  - "jittery ptp sync"
+  - "ptp sync interval drift"
+
+steps:
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 12 }
+    bind: ptp
+    fail_if: ptp.verdict == 'error'
+    on_fail: "PTP probe failed: {ptp.error}"
+    warn_if: ptp.sync_jitter_us is not null && ptp.sync_jitter_us > 250
+    warn_msg: "Sync jitter is {ptp.sync_jitter_us} µs — values above ~250 µs cause audible glitches on tight (≤1 ms) Dante latency profiles."
+
+  - id: link
+    tool: local.linkaudit
+    args: { iface: "{nic}" }
+    bind: link
+    warn_if: link.eee_enabled == true || link.duplex == 'half'
+    warn_msg: "NIC link is bad for PTP: duplex={link.duplex}, EEE-enabled={link.eee_enabled}. EEE injects ~30 µs of jitter on every wake; half-duplex causes collisions. Disable EEE on this NIC and on every switch port in the PTP path."
+
+  - id: dscp
+    tool: local.dscp_probe
+    args: { iface: "{nic}", duration_s: 10 }
+    bind: dscp
+    warn_if: dscp.verdict == 'qos_stripped' || dscp.verdict == 'qos_mixed'
+    warn_msg: "QoS markings on PTP are being stripped or remarked. PTP must be CS7 (DSCP 56) end-to-end so the switch egress queue prioritises Sync messages."

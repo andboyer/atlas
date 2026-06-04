@@ -20,7 +20,11 @@ fn main() {
     // not compiled or bundled.
     //
     // Silence unused-import warnings on every target.
-    let _ = (env::var("CARGO_MANIFEST_DIR"), PathBuf::new(), Command::new("true"));
+    let _ = (
+        env::var("CARGO_MANIFEST_DIR"),
+        PathBuf::new(),
+        Command::new("true"),
+    );
 
     tauri_build::build()
 }

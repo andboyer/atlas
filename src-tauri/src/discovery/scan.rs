@@ -11,8 +11,7 @@ use tokio::task::JoinSet;
 /// run a short per-device latency probe. Returns devices sorted by IP.
 pub async fn discover_and_probe() -> Vec<DeviceInfo> {
     // Start mDNS browse concurrently with ARP (mDNS runs for 3s in a blocking thread).
-    let mdns_handle =
-        tokio::task::spawn_blocking(|| mdns::browse_blocking(Duration::from_secs(3)));
+    let mdns_handle = tokio::task::spawn_blocking(|| mdns::browse_blocking(Duration::from_secs(3)));
 
     let entries = match arp::read_arp_table().await {
         Ok(e) => e,
@@ -23,8 +22,7 @@ pub async fn discover_and_probe() -> Vec<DeviceInfo> {
     };
 
     // Await mDNS results (will already be done or close to done by now).
-    let mdns_map: HashMap<String, mdns::MdnsRecord> =
-        mdns_handle.await.unwrap_or_default();
+    let mdns_map: HashMap<String, mdns::MdnsRecord> = mdns_handle.await.unwrap_or_default();
 
     let mut set: JoinSet<DeviceInfo> = JoinSet::new();
     let now = Utc::now();

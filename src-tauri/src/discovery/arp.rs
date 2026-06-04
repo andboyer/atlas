@@ -12,20 +12,12 @@ pub struct ArpEntry {
 pub async fn read_arp_table() -> Result<Vec<ArpEntry>> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let out = Command::new("arp")
-            .no_console()
-            .arg("-an")
-            .output()
-            .await?;
+        let out = Command::new("arp").no_console().arg("-an").output().await?;
         Ok(parse_arp_an(&String::from_utf8_lossy(&out.stdout)))
     }
     #[cfg(target_os = "windows")]
     {
-        let out = Command::new("arp")
-            .no_console()
-            .arg("-a")
-            .output()
-            .await?;
+        let out = Command::new("arp").no_console().arg("-a").output().await?;
         Ok(parse_arp_windows(&String::from_utf8_lossy(&out.stdout)))
     }
 }

@@ -71,7 +71,7 @@ fn audit(iface: &str, listen_secs: u32) -> anyhow::Result<DscpProbeResult> {
     // (stream_kind, dst_group, dst_port_for_classification) → samples
     let mut by_stream: HashMap<(String, String), (Vec<Sample>, u8)> = HashMap::new();
 
-    let sockets = vec![
+    let sockets = [
         open_socket(iface_v4, PTP_EVENT_PORT, &[PTP_GROUP])?,
         open_socket(iface_v4, PTP_GENERAL_PORT, &[PTP_GROUP, PTP_GROUP_GENERAL])?,
         open_socket(
@@ -86,13 +86,11 @@ fn audit(iface: &str, listen_secs: u32) -> anyhow::Result<DscpProbeResult> {
             &[Ipv4Addr::new(239, 69, 0, 1)],
         )?,
     ];
-    let kinds: Vec<&str> = vec!["ptp_event", "ptp_general", "aes67_audio"];
-    let expected: Vec<u8> = vec![56, 56, 34];
+    let kinds: [&str; 3] = ["ptp_event", "ptp_general", "aes67_audio"];
+    let expected: [u8; 3] = [56, 56, 34];
 
     while Instant::now() < deadline {
-        for ((sock, kind), &exp_dscp) in
-            sockets.iter().zip(kinds.iter()).zip(expected.iter())
-        {
+        for ((sock, kind), &exp_dscp) in sockets.iter().zip(kinds.iter()).zip(expected.iter()) {
             let _ = sock.set_read_timeout(Some(Duration::from_millis(150)));
             match recv_with_tos_ttl(sock) {
                 Ok(Some((from, sample))) => {
@@ -181,11 +179,7 @@ fn resolve_iface_v4(iface: &str) -> Ipv4Addr {
         .unwrap_or(Ipv4Addr::UNSPECIFIED)
 }
 
-fn open_socket(
-    iface_v4: Ipv4Addr,
-    port: u16,
-    groups: &[Ipv4Addr],
-) -> std::io::Result<Socket> {
+fn open_socket(iface_v4: Ipv4Addr, port: u16, groups: &[Ipv4Addr]) -> std::io::Result<Socket> {
     let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     sock.set_reuse_address(true)?;
     #[cfg(unix)]
@@ -263,17 +257,16 @@ fn recv_with_tos_ttl(sock: &Socket) -> std::io::Result<Option<(Option<Ipv4Addr>,
         };
     }
 
-    let from: Option<Ipv4Addr> = if msg.msg_namelen
-        >= std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t
-    {
-        let sa = unsafe { from_storage.assume_init() };
-        // sin_addr is in network byte order; native-endian on most
-        // platforms after `s_addr` is a u32 we must to_be().
-        let raw = u32::from_be(sa.sin_addr.s_addr);
-        Some(Ipv4Addr::from(raw))
-    } else {
-        None
-    };
+    let from: Option<Ipv4Addr> =
+        if msg.msg_namelen >= std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t {
+            let sa = unsafe { from_storage.assume_init() };
+            // sin_addr is in network byte order; native-endian on most
+            // platforms after `s_addr` is a u32 we must to_be().
+            let raw = u32::from_be(sa.sin_addr.s_addr);
+            Some(Ipv4Addr::from(raw))
+        } else {
+            None
+        };
 
     let mut tos: u8 = 0;
     let mut ttl: u8 = 0;

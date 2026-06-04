@@ -30,11 +30,11 @@
 //!     file instead. This is required on Windows where `Start-Process
 //!     -Verb RunAs` cannot pipe stdout back to the parent process.
 
+#[cfg(target_os = "macos")]
+use std::ffi::CString;
 use std::io::ErrorKind;
 use std::mem::MaybeUninit;
 use std::net::Ipv4Addr;
-#[cfg(target_os = "macos")]
-use std::ffi::CString;
 #[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
@@ -188,9 +188,7 @@ fn listen_for_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<IgmpProbeRes
                     }
                 }
             }
-            Err(e)
-                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
-            {
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
                 continue;
             }
             Err(e) => return Err(e.into()),
@@ -364,8 +362,7 @@ fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
     // falls back to INADDR_ANY; that won't get us multicast on Windows
     // but it's still a valid (degenerate) listen — the user will see
     // "silent" rather than an error.
-    let bind_v4 = if iface.is_empty() || iface == "0.0.0.0" || iface.eq_ignore_ascii_case("any")
-    {
+    let bind_v4 = if iface.is_empty() || iface == "0.0.0.0" || iface.eq_ignore_ascii_case("any") {
         std::net::Ipv4Addr::UNSPECIFIED
     } else {
         let info = crate::probes::iface::find_by_name(iface).ok_or_else(|| {

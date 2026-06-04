@@ -1,0 +1,63 @@
+id: aes67-audio-dropouts
+name: AES67 / Ravenna audio dropouts
+category: av
+applies_to: [aes67, ravenna]
+description: >
+  Investigate dropouts on AES67 / Ravenna streams. Validates SAP/SDP
+  discovery, PTP media-profile health, DSCP markings, and the
+  link/QoS path.
+symptoms:
+  - "aes67 audio dropping out"
+  - "ravenna stream glitching"
+  - "aes67 clicks and pops"
+  - "aes67 dropouts"
+  - "ravenna audio dropouts"
+
+steps:
+  - id: link
+    tool: local.linkaudit
+    args: { iface: "{nic}" }
+    bind: link
+    fail_if: link.verdict == 'error'
+    on_fail: "Could not read link state for {nic}: {link.error}"
+    warn_if: link.duplex == 'half' || (link.link_speed_mbps is not null && link.link_speed_mbps < 100)
+    warn_msg: "Link is unhealthy: duplex={link.duplex}, speed={link.link_speed_mbps} Mb/s. AES67 requires full-duplex switched Ethernet."
+    note_if: link.eee_enabled == true
+    note_msg: "EEE / 802.3az is enabled — disable it on every switch port and NIC in the AES67 path; it injects sub-millisecond PTP jitter on every wake."
+
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 8 }
+    bind: ptp
+    fail_if: ptp.verdict == 'error'
+    on_fail: "PTP probe failed: {ptp.error}"
+    warn_if: ptp.competing_gm_observed == true
+    warn_msg: "Multiple PTP grandmasters detected. AES67 receivers will glitch on every BMCA election."
+    branch:
+      - when: ptp.verdict == 'multiple_gms'
+        runbook: ptp-multiple-grandmasters
+      - when: ptp.verdict == 'jittery_sync'
+        runbook: ptp-jittery-sync
+      - when: ptp.verdict == 'silent' || ptp.verdict == 'no_ptp'
+        note: "No PTP traffic observed. AES67 requires a working PTPv2 grandmaster on the media profile (default domain 0, sync interval 1/8 s)."
+
+  - id: sap
+    tool: local.sap_listen
+    args: { iface: "{nic}", duration_s: 12 }
+    bind: sap
+    warn_if: length(sap.streams) == 0
+    warn_msg: "No SAP/SDP announcements seen on {nic} within 12 seconds. AES67 senders advertise on 224.2.127.254:9875 — verify the sender is on the same VLAN and the switch is not filtering that group."
+
+  - id: dscp
+    tool: local.dscp_probe
+    args: { iface: "{nic}", duration_s: 10 }
+    bind: dscp
+    warn_if: dscp.verdict == 'qos_stripped' || dscp.verdict == 'qos_mixed'
+    warn_msg: "DSCP audit verdict: {dscp.verdict}. AES67 audio should arrive marked EF (DSCP 46) or AF41 (DSCP 34) and PTP should arrive marked CS7 (DSCP 56)."
+
+  - id: mcast
+    tool: local.multicast_groups
+    args: { iface: "{nic}" }
+    bind: mcast
+    note_if: mcast.aes67_audio_groups == 0
+    note_msg: "No AES67 audio multicast groups joined on {nic}. Either no receivers have subscribed or IGMP snooping is dropping joins."

@@ -116,8 +116,8 @@ fn list_unix() -> Vec<NetworkInterfaceInfo> {
             if !ifa.ifa_name.is_null() {
                 let name = CStr::from_ptr(ifa.ifa_name).to_string_lossy().into_owned();
                 let flags = ifa.ifa_flags as i32;
-                let is_up = (flags & libc::IFF_UP as i32) != 0;
-                let is_loopback = (flags & libc::IFF_LOOPBACK as i32) != 0;
+                let is_up = (flags & libc::IFF_UP) != 0;
+                let is_loopback = (flags & libc::IFF_LOOPBACK) != 0;
                 let is_physical = is_physical_name(&name);
                 let entry = by_name
                     .entry(name.clone())
@@ -239,7 +239,9 @@ fn list_windows() -> Option<Vec<NetworkInterfaceInfo>> {
         while !ua.is_null() {
             let entry = unsafe { &*ua };
             let sa = entry.Address.lpSockaddr;
-            if !sa.is_null() && unsafe { (*sa).sa_family } == windows_sys::Win32::Networking::WinSock::AF_INET {
+            if !sa.is_null()
+                && unsafe { (*sa).sa_family } == windows_sys::Win32::Networking::WinSock::AF_INET
+            {
                 let sin = sa as *const SOCKADDR_IN;
                 let raw = unsafe { (*sin).sin_addr.S_un.S_addr };
                 let octets = raw.to_ne_bytes();
@@ -314,11 +316,10 @@ fn read_wide(ptr: *const u16) -> String {
 fn is_physical_name(name: &str) -> bool {
     const VIRTUAL_PREFIXES: &[&str] = &[
         // macOS
-        "lo", "utun", "awdl", "llw", "anpi", "gif", "stf", "bridge", "ap", "pktap",
-        "vmenet", "XHC", "pdp_ip", "feth",
-        // Linux
-        "docker", "br-", "virbr", "veth", "tun", "tap", "vnet", "vmnet", "kube", "cni",
-        "flannel", "cali", "weave", "cilium", "wg",
+        "lo", "utun", "awdl", "llw", "anpi", "gif", "stf", "bridge", "ap", "pktap", "vmenet", "XHC",
+        "pdp_ip", "feth", // Linux
+        "docker", "br-", "virbr", "veth", "tun", "tap", "vnet", "vmnet", "kube", "cni", "flannel",
+        "cali", "weave", "cilium", "wg",
     ];
     // Match on prefix-then-digit-or-delimiter (or exact match) so we
     // don't catch unrelated names that just happen to share a leading
@@ -326,7 +327,9 @@ fn is_physical_name(name: &str) -> bool {
     // hypothetical `en` virtual prefix). Prefixes that already end in a
     // delimiter (`br-`) accept any remainder.
     for &pfx in VIRTUAL_PREFIXES {
-        let Some(rest) = name.strip_prefix(pfx) else { continue };
+        let Some(rest) = name.strip_prefix(pfx) else {
+            continue;
+        };
         if rest.is_empty() {
             return false;
         }
@@ -604,7 +607,9 @@ fn bind_socket_to_iface(sock: &Socket, addr: IpAddr, iface: &str) -> std::io::Re
     // gives sensible behavior on the rare older box.
     if let (IpAddr::V4(_), Some(v4)) = (
         addr,
-        info.ipv4.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok()),
+        info.ipv4
+            .as_deref()
+            .and_then(|s| s.parse::<Ipv4Addr>().ok()),
     ) {
         let _ = sock.bind(&SocketAddr::new(IpAddr::V4(v4), 0).into());
     }

@@ -561,7 +561,10 @@ fn rule_pos_processor_high_latency(ctx: &Context) -> Option<RuleHit> {
     }
     Some(RuleHit {
         rule_id: "pos.processor_high_latency",
-        title: format!("{} payment / SaaS endpoint(s) responding slowly", slow.len()),
+        title: format!(
+            "{} payment / SaaS endpoint(s) responding slowly",
+            slow.len()
+        ),
         severity: Severity::Medium,
         confidence: 0.8,
         evidence: slow
@@ -617,10 +620,7 @@ fn rule_watched_device_offline(ctx: &Context) -> Option<RuleHit> {
 // ─────────────────────────── Anomaly rules ───────────────────────────────
 
 fn rule_anomaly_rssi_drop(ctx: &Context) -> Option<RuleHit> {
-    let sig = ctx
-        .anomalies
-        .iter()
-        .find(|a| a.metric == "link.rssi_dbm")?;
+    let sig = ctx.anomalies.iter().find(|a| a.metric == "link.rssi_dbm")?;
     if sig.z_score > -2.5 {
         return None;
     }
@@ -693,7 +693,8 @@ fn rule_anomaly_loss_spike(ctx: &Context) -> Option<RuleHit> {
                 "Loss {:.1}% vs baseline {:.1}% (z = {:.2})",
                 sig.current, sig.baseline, sig.z_score
             ),
-            "Loss spike often precedes complete connectivity failure; investigate immediately.".into(),
+            "Loss spike often precedes complete connectivity failure; investigate immediately."
+                .into(),
         ],
         affected_devices: vec![],
         recommendation_id: Some("rec.anomaly_loss"),
@@ -713,7 +714,8 @@ fn rule_captive_portal(ctx: &Context) -> Option<RuleHit> {
         confidence: 0.92,
         evidence: vec![
             "HTTP probe to connectivitycheck.gstatic.com did not return 204.".into(),
-            "All traffic is being intercepted (hotel, airport, café, or corporate login page).".into(),
+            "All traffic is being intercepted (hotel, airport, café, or corporate login page)."
+                .into(),
         ],
         affected_devices: vec![],
         recommendation_id: Some("rec.captive_portal"),
@@ -755,7 +757,8 @@ fn rule_low_mtu(ctx: &Context) -> Option<RuleHit> {
         confidence: 0.85,
         evidence: vec![
             format!("Effective path MTU is {mtu} bytes (standard Ethernet is 1500)."),
-            "This can cause slowdowns, black-hole routing, and TCP stalls for large transfers.".into(),
+            "This can cause slowdowns, black-hole routing, and TCP stalls for large transfers."
+                .into(),
             "Common causes: VPN tunnel, PPPoE DSL, 6in4/GRE encapsulation.".into(),
         ],
         affected_devices: vec![],
@@ -806,7 +809,10 @@ fn rule_co_channel_interference(ctx: &Context) -> Option<RuleHit> {
                 if interferers.len() == 1 { "" } else { "s" }
             )];
             ev.extend(interferers.iter().take(5).cloned());
-            ev.push("Co-channel interference significantly reduces throughput and increases latency.".into());
+            ev.push(
+                "Co-channel interference significantly reduces throughput and increases latency."
+                    .into(),
+            );
             ev
         },
         affected_devices: vec![],
@@ -840,9 +846,7 @@ fn rule_adjacent_channel_interference(ctx: &Context) -> Option<RuleHit> {
 
     Some(RuleHit {
         rule_id: "detect.adjacent_channel_interference",
-        title: format!(
-            "Adjacent-channel interference near 2.4 GHz channel {own_ch}",
-        ),
+        title: format!("Adjacent-channel interference near 2.4 GHz channel {own_ch}",),
         severity: Severity::Low,
         confidence: 0.70,
         evidence: {
@@ -958,7 +962,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -978,7 +982,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -998,7 +1002,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1025,7 +1029,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1053,7 +1057,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1077,7 +1081,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1100,7 +1104,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1130,7 +1134,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1163,7 +1167,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1193,7 +1197,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1220,7 +1224,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1231,7 +1235,12 @@ mod tests {
 
     #[test]
     fn watched_device_does_not_fire_when_online() {
-        let devices = vec![dev("aa:bb:cc:dd:ee:01", DeviceClass::PosTerminal, true, Some(3.0))];
+        let devices = vec![dev(
+            "aa:bb:cc:dd:ee:01",
+            DeviceClass::PosTerminal,
+            true,
+            Some(3.0),
+        )];
         let profile = ProfileHints {
             watchlist: vec!["aa:bb:cc:dd:ee:01".to_string()],
             service_high_latency_ms: 1000.0,
@@ -1245,7 +1254,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1269,7 +1278,7 @@ mod tests {
             anomalies: vec![sig],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1294,7 +1303,7 @@ mod tests {
             anomalies: vec![sig],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1313,7 +1322,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: true,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };
@@ -1332,7 +1341,7 @@ mod tests {
             anomalies: vec![],
             captive_portal: false,
             dns_leak: false,
-                        mtu_bytes: None,
+            mtu_bytes: None,
             nearby_aps: vec![],
             speed_mbps: None,
         };

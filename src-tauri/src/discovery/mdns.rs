@@ -75,23 +75,20 @@ pub fn browse_blocking(window: Duration) -> HashMap<String, MdnsRecord> {
             while let Ok(event) = rx.recv_timeout(Duration::from_millis(1)) {
                 got_any = true;
                 if let ServiceEvent::ServiceResolved(info) = event {
-                    let hostname = info
-                        .get_hostname()
-                        .trim_end_matches('.')
-                        .to_lowercase();
+                    let hostname = info.get_hostname().trim_end_matches('.').to_lowercase();
                     let svc = info
                         .get_type()
                         .trim_end_matches('.')
                         .trim_end_matches(".local")
                         .to_string();
 
-                    let entry = by_hostname.entry(hostname.clone()).or_insert_with(|| {
-                        MdnsRecord {
+                    let entry = by_hostname
+                        .entry(hostname.clone())
+                        .or_insert_with(|| MdnsRecord {
                             hostname: hostname.clone(),
                             addresses: vec![],
                             services: vec![],
-                        }
-                    });
+                        });
 
                     for addr in info.get_addresses() {
                         let s = addr.to_string();

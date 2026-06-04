@@ -1,0 +1,49 @@
+id: aes67-stream-not-received
+name: AES67 stream not received
+category: av
+applies_to: [aes67]
+description: >
+  An AES67 stream is published but the receiver isn't getting audio.
+  Listens for SAP/SDP advertisements, confirms multicast group is
+  joined on the receiver NIC, and validates PTP + DSCP.
+symptoms:
+  - "aes67 stream not playing"
+  - "aes67 receiver silent"
+  - "no audio from aes67"
+  - "aes67 not receiving"
+
+steps:
+  - id: link
+    tool: local.linkaudit
+    args: { iface: "{nic}" }
+    bind: link
+    warn_if: link.duplex == 'half'
+    warn_msg: "NIC is in half-duplex mode — fix immediately."
+
+  - id: sap
+    tool: local.sap_listen
+    args: { iface: "{nic}", duration_s: 15 }
+    bind: sap
+    fail_if: length(sap.streams) == 0 && sap.verdict != 'error'
+    on_fail: "No SAP/SDP announcements on {nic} after 15 s. The sender is either not running, on a different VLAN, or the switch is filtering 224.2.127.254:9875."
+
+  - id: mcast
+    tool: local.multicast_groups
+    args: { iface: "{nic}" }
+    bind: mcast
+    warn_if: mcast.aes67_audio_groups == 0
+    warn_msg: "Sender is advertising but no AES67 audio groups are joined on {nic}. Check IGMP snooping on the receiver's switch port — without an active IGMP querier, snooping silently drops the joins for AES67 audio multicast groups."
+
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 8 }
+    bind: ptp
+    warn_if: ptp.verdict == 'silent' || ptp.verdict == 'no_ptp'
+    warn_msg: "No PTP traffic observed. AES67 receivers will mute until they are PTP-locked to the same grandmaster as the sender."
+
+  - id: dscp
+    tool: local.dscp_probe
+    args: { iface: "{nic}", duration_s: 10 }
+    bind: dscp
+    note_if: dscp.verdict == 'qos_stripped'
+    note_msg: "QoS markings are being stripped — audio packets are being treated as best-effort. This causes dropouts under load even when the stream is otherwise correctly subscribed."

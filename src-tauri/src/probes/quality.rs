@@ -146,9 +146,7 @@ fn parse_json(s: &str) -> Option<QualityStats> {
 
     // Throughput: some builds report bits/s, others Mbit/s. Anything > 10k we
     // treat as bits/s; otherwise it's already Mbit/s.
-    let to_mbps = |v: Option<f64>| {
-        v.map(|x| if x > 10_000.0 { x / 1_000_000.0 } else { x } as f32)
-    };
+    let to_mbps = |v: Option<f64>| v.map(|x| if x > 10_000.0 { x / 1_000_000.0 } else { x } as f32);
 
     // Responsiveness in the `-c` JSON is reported in different units across
     // macOS builds. We've observed values like:
@@ -174,10 +172,7 @@ fn parse_json(s: &str) -> Option<QualityStats> {
     // base_rtt and idle_latency_ms are both already in milliseconds in every
     // macOS build we've seen. Earlier code multiplied base_rtt by 1000,
     // turning a normal 111 ms reading into a nonsensical 111_000 ms.
-    let idle = raw
-        .idle_latency_ms
-        .or(raw.base_rtt)
-        .map(|v| v as f32);
+    let idle = raw.idle_latency_ms.or(raw.base_rtt).map(|v| v as f32);
 
     Some(QualityStats {
         dl_throughput_mbps: to_mbps(raw.dl_throughput),
@@ -399,13 +394,8 @@ async fn measure_cloudflare() -> Option<QualityStats> {
             total
         }
     };
-    let (dl_bytes, dl_probes) = run_phase(
-        4,
-        Duration::from_secs(8),
-        client.clone(),
-        dl_worker,
-    )
-    .await;
+    let (dl_bytes, dl_probes) =
+        run_phase(4, Duration::from_secs(8), client.clone(), dl_worker).await;
 
     // 3) Upload phase — 4 parallel streams for 8 s.
     let ul_client = client.clone();
@@ -494,7 +484,9 @@ Idle Latency: 41.667 milli-seconds
 
     #[test]
     fn parses_json_bits_per_sec() {
-        let sample = r#"{"dl_throughput": 195000000, "ul_throughput": 92000000, "responsiveness": 1063, "base_rtt": 0.041}"#;
+        // Note: every macOS `networkQuality` build we've seen emits
+        // `idle_latency_ms` and `base_rtt` both already in milliseconds.
+        let sample = r#"{"dl_throughput": 195000000, "ul_throughput": 92000000, "responsiveness": 1063, "idle_latency_ms": 41.0}"#;
         let q = parse_json(sample).expect("parsed");
         assert!((q.dl_throughput_mbps.unwrap() - 195.0).abs() < 1.0);
         assert_eq!(q.responsiveness_rpm, Some(1063));

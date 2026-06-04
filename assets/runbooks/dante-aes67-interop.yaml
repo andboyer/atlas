@@ -1,0 +1,44 @@
+id: dante-aes67-interop
+name: Dante ↔ AES67 interop check
+category: av
+applies_to: [dante, aes67]
+description: >
+  Verify the configuration required to bridge Dante and AES67 on the
+  same network: PTP domain 0 + media profile, DSCP markings, and that
+  Dante devices have AES67 mode enabled.
+symptoms:
+  - "dante to aes67 interop not working"
+  - "aes67 transmit from dante"
+  - "dante can't hear aes67"
+  - "aes67 receiver not seeing dante stream"
+
+steps:
+  - id: dante
+    tool: local.dante_browse
+    args: { duration_s: 5 }
+    bind: dante
+    warn_if: length(dante.devices) == 0
+    warn_msg: "No Dante devices discovered. AES67 interop requires Dante hardware/software with AES67 mode enabled in Dante Controller."
+
+  - id: sap
+    tool: local.sap_listen
+    args: { iface: "{nic}", duration_s: 12 }
+    bind: sap
+    note_if: length(sap.streams) == 0
+    note_msg: "No SAP announcements seen on {nic}. Dante in AES67 mode advertises sessions via SAP on 224.2.127.254:9875 — silence here means either Dante AES67 mode is disabled or the switch is filtering the SAP group."
+
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 8 }
+    bind: ptp
+    warn_if: ptp.verdict == 'multiple_gms' || ptp.competing_gm_observed == true
+    warn_msg: "Multiple PTP grandmasters detected — Dante (default domain 4) and AES67 (default domain 0) must converge on the same domain, with consistent priority1/priority2 values."
+    note_if: length(ptp.domains) > 1
+    note_msg: "Multiple PTP domains observed ({ptp.domains}). For Dante/AES67 interop, set every device to PTP domain 0 (media profile)."
+
+  - id: dscp
+    tool: local.dscp_probe
+    args: { iface: "{nic}", duration_s: 10 }
+    bind: dscp
+    warn_if: dscp.verdict == 'qos_stripped'
+    warn_msg: "QoS markings are being stripped. Dante (EF / DSCP 46) and AES67 (AF41 / DSCP 34) must both pass through with markings preserved."

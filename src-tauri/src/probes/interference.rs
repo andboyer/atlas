@@ -59,13 +59,21 @@ pub fn build_report(nearby: &[NearbyAp], own_channel: Option<u32>) -> Interferen
     let recommended_24 = scores
         .iter()
         .filter(|s| s.band == "2.4" && NON_OVERLAPPING_24.contains(&s.channel))
-        .min_by(|a, b| a.interference_score.partial_cmp(&b.interference_score).unwrap())
+        .min_by(|a, b| {
+            a.interference_score
+                .partial_cmp(&b.interference_score)
+                .unwrap()
+        })
         .map(|s| s.channel);
 
     let recommended_5 = scores
         .iter()
         .filter(|s| s.band == "5")
-        .min_by(|a, b| a.interference_score.partial_cmp(&b.interference_score).unwrap())
+        .min_by(|a, b| {
+            a.interference_score
+                .partial_cmp(&b.interference_score)
+                .unwrap()
+        })
         .map(|s| s.channel);
 
     let current_channel_score = own_channel.and_then(|ch| {

@@ -51,7 +51,11 @@ pub fn list_kinds() -> Vec<(&'static str, &'static str, &'static str)> {
 /// Run the named stress test to completion. `iface` (optional) pins the
 /// probes that have a notion of "the" gateway (ping_flood) to that NIC's
 /// next-hop instead of whatever default route the kernel picks.
-pub async fn run(app: AppHandle, kind: &str, iface: Option<&str>) -> Result<StressTestResult, String> {
+pub async fn run(
+    app: AppHandle,
+    kind: &str,
+    iface: Option<&str>,
+) -> Result<StressTestResult, String> {
     match kind {
         KIND_PING_FLOOD => Ok(ping_flood(app, iface).await),
         KIND_DNS_BURST => Ok(dns_burst(app).await),
@@ -453,11 +457,8 @@ fn compute_stats(samples: &[StressSample]) -> StressStats {
         None
     } else {
         let mean = avg_ms.unwrap_or(0.0);
-        let var: f32 = latencies
-            .iter()
-            .map(|v| (v - mean).powi(2))
-            .sum::<f32>()
-            / latencies.len() as f32;
+        let var: f32 =
+            latencies.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / latencies.len() as f32;
         Some(var.sqrt())
     };
     let loss_pct = if attempted == 0 {
@@ -487,7 +488,9 @@ fn fmt_opt(v: Option<f32>) -> String {
 }
 
 fn short_host(url: &str) -> String {
-    let s = url.trim_start_matches("https://").trim_start_matches("http://");
+    let s = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     s.split('/').next().unwrap_or(url).to_string()
 }
 
@@ -549,7 +552,11 @@ mod tests {
 
     #[test]
     fn stats_all_good() {
-        let samples = vec![s(Some(10.0), true), s(Some(20.0), true), s(Some(30.0), true)];
+        let samples = vec![
+            s(Some(10.0), true),
+            s(Some(20.0), true),
+            s(Some(30.0), true),
+        ];
         let st = compute_stats(&samples);
         assert_eq!(st.attempted, 3);
         assert_eq!(st.failed, 0);

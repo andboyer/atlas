@@ -1,0 +1,44 @@
+id: dante-device-unreachable
+name: Dante device unreachable
+category: av
+applies_to: [dante]
+description: >
+  A specific Dante device is offline / not appearing in Dante Controller.
+  Validates mDNS discovery, multicast subscriptions, link health, and
+  pings the device if its IP is known.
+symptoms:
+  - "dante device offline"
+  - "device not showing in dante controller"
+  - "dante device missing"
+  - "can't find dante device"
+
+steps:
+  - id: link
+    tool: local.linkaudit
+    args: { iface: "{nic}" }
+    bind: link
+    fail_if: link.verdict == 'error'
+    on_fail: "Could not read link state for {nic}: {link.error}"
+    warn_if: link.duplex == 'half' || (link.link_speed_mbps is not null && link.link_speed_mbps < 100)
+    warn_msg: "Local NIC link is unhealthy ({link.duplex} / {link.link_speed_mbps} Mb/s)."
+
+  - id: gw
+    tool: local.gateway
+    args: { iface: "{nic}" }
+    bind: gw
+    warn_if: gw.gateway_ip is null
+    warn_msg: "No default gateway resolved for {nic} — either this NIC has no IP, or it is on a VLAN with no router."
+
+  - id: discover
+    tool: local.dante_browse
+    args: { duration_s: 8 }
+    bind: dante
+    warn_if: length(dante.devices) == 0
+    warn_msg: "No Dante devices visible on the network. mDNS (UDP 5353) may be filtered by the switch — IGMP snooping with no querier silently drops the 224.0.0.251 group."
+
+  - id: mcast
+    tool: local.multicast_groups
+    args: { iface: "{nic}" }
+    bind: mcast
+    note_if: mcast.dante_audio_groups == 0 && length(dante.devices) > 0
+    note_msg: "Dante devices are visible but no audio groups (239.69.x.x) are joined on {nic}. The missing device may be powered on but unable to subscribe to any of your flows — check VLAN membership and IGMP snooping on its switch port."

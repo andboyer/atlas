@@ -129,11 +129,26 @@ mod tests {
 
     #[test]
     fn maps_phy_to_generation() {
-        assert_eq!(wifi_generation(Some("802.11ax"), Some("5")).as_deref(), Some("Wi-Fi 6"));
-        assert_eq!(wifi_generation(Some("802.11ax"), Some("6")).as_deref(), Some("Wi-Fi 6E"));
-        assert_eq!(wifi_generation(Some("802.11ac"), Some("5")).as_deref(), Some("Wi-Fi 5"));
-        assert_eq!(wifi_generation(Some("802.11n"), Some("2.4")).as_deref(), Some("Wi-Fi 4"));
-        assert_eq!(wifi_generation(Some("802.11be"), Some("6")).as_deref(), Some("Wi-Fi 7"));
+        assert_eq!(
+            wifi_generation(Some("802.11ax"), Some("5")).as_deref(),
+            Some("Wi-Fi 6")
+        );
+        assert_eq!(
+            wifi_generation(Some("802.11ax"), Some("6")).as_deref(),
+            Some("Wi-Fi 6E")
+        );
+        assert_eq!(
+            wifi_generation(Some("802.11ac"), Some("5")).as_deref(),
+            Some("Wi-Fi 5")
+        );
+        assert_eq!(
+            wifi_generation(Some("802.11n"), Some("2.4")).as_deref(),
+            Some("Wi-Fi 4")
+        );
+        assert_eq!(
+            wifi_generation(Some("802.11be"), Some("6")).as_deref(),
+            Some("Wi-Fi 7")
+        );
         assert_eq!(wifi_generation(None, None), None);
     }
 
