@@ -48,7 +48,7 @@ async fn find_wifi_interface() -> Option<String> {
 fn iw_field<'a>(s: &'a str, key: &str) -> Option<&'a str> {
     s.lines()
         .find(|l| l.trim_start().starts_with(key))
-        .and_then(|l| l.splitn(2, ':').nth(1))
+        .and_then(|l| l.split_once(':').map(|(_, v)| v))
         .map(|v| v.trim())
         .filter(|v| !v.is_empty())
 }
@@ -72,15 +72,15 @@ fn parse_iw_output(link: &str, info: &str) -> LinkStats {
     let tx_rate = link
         .lines()
         .find(|l| l.trim_start().starts_with("tx bitrate"))
-        .and_then(|l| l.splitn(2, ':').nth(1))
-        .and_then(|v| v.trim().split_whitespace().next())
+        .and_then(|l| l.split_once(':').map(|(_, v)| v))
+        .and_then(|v| v.split_whitespace().next())
         .and_then(|v| v.parse::<f32>().ok());
 
     let rx_rate = link
         .lines()
         .find(|l| l.trim_start().starts_with("rx bitrate"))
-        .and_then(|l| l.splitn(2, ':').nth(1))
-        .and_then(|v| v.trim().split_whitespace().next())
+        .and_then(|l| l.split_once(':').map(|(_, v)| v))
+        .and_then(|v| v.split_whitespace().next())
         .and_then(|v| v.parse::<f32>().ok());
 
     let (channel, channel_width_mhz, band) = parse_iw_channel(info);

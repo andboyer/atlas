@@ -431,13 +431,10 @@ fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
     // Surface BOTH IOCTL failures so the user can tell whether the
     // firewall, an EDR, or a missing privilege is the cause.
     let igmpmcast_err = std::io::Error::last_os_error();
-    Err(std::io::Error::new(
-        ErrorKind::Other,
-        format!(
-            "SIO_RCVALL failed ({rcvall_err}); SIO_RCVALL_IGMPMCAST also failed ({igmpmcast_err}) — \
+    Err(std::io::Error::other(format!(
+        "SIO_RCVALL failed ({rcvall_err}); SIO_RCVALL_IGMPMCAST also failed ({igmpmcast_err}) — \
              check Windows Defender Firewall inbound rules for Atlas and ensure the helper is running elevated"
-        ),
-    ))
+    )))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

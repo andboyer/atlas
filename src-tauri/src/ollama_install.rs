@@ -23,13 +23,18 @@
 //! because Ollama ships an auto-update every few weeks and a hard pin
 //! would silently break the installer the moment they cut a new release.
 
-use anyhow::{anyhow, Context, Result};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use anyhow::Context;
+use anyhow::{anyhow, Result};
 use serde::Serialize;
+#[cfg(not(target_os = "windows"))]
 use std::path::Path;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
 use std::time::Duration;
 use tauri::ipc::Channel;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::process_util::NoConsoleExt;
 
 /// Snapshot of Ollama health on the local box. Returned to the UI so it
@@ -59,6 +64,7 @@ pub struct OllamaStatus {
 /// on fast connections.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub enum InstallProgress {
     /// Resolved download URL + expected size in bytes (from
     /// `Content-Length`). Fires before the download starts so the UI can

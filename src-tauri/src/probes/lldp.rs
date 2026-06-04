@@ -191,6 +191,7 @@ fn enum_arp_windows() -> Result<Vec<(String, String)>, String> {
     Ok(entries)
 }
 
+#[allow(dead_code)] // Unix-only parser; reachable via tests on all platforms.
 fn parse_arp_line(line: &str) -> Option<(String, String)> {
     // ? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]
     let open = line.find('(')?;

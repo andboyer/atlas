@@ -22,6 +22,7 @@ pub async fn read_arp_table() -> Result<Vec<ArpEntry>> {
     }
 }
 
+#[allow(dead_code)] // Unix-only parser; reachable via tests on all platforms.
 fn parse_arp_an(s: &str) -> Vec<ArpEntry> {
     // Examples:
     //   ? (192.168.1.84) at d4:9d:c0:ce:50:84 on en0 ifscope [ethernet]

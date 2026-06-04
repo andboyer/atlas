@@ -16,12 +16,14 @@
 //!     routes the socket's traffic through that NIC regardless of the
 //!     routing table — exact semantic match for macOS's IP_BOUND_IF.
 
+#[cfg(unix)]
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::ffi::CStr;
 #[cfg(unix)]
 use std::ffi::CString;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawSocket;
@@ -372,7 +374,7 @@ fn classify_wireless_unix(name: &str) -> Option<bool> {
         if std::path::Path::new(&format!("/sys/class/net/{name}")).exists() {
             return Some(false);
         }
-        return None;
+        None
     }
     #[cfg(target_os = "macos")]
     {
@@ -566,7 +568,6 @@ fn bind_socket_to_iface(sock: &Socket, addr: IpAddr, iface: &str) -> std::io::Re
     // Quirk: the v4 form takes the interface index in **network byte
     // order**; the v6 form takes it in host byte order. We only do v4
     // here, so byte-swap once.
-    use std::os::raw::c_void;
     use windows_sys::Win32::Networking::WinSock::{
         setsockopt, IPPROTO_IP, IPPROTO_IPV6, IPV6_UNICAST_IF, IP_UNICAST_IF, SOCKET,
     };
@@ -585,8 +586,8 @@ fn bind_socket_to_iface(sock: &Socket, addr: IpAddr, iface: &str) -> std::io::Re
     })?;
     let sock_handle = sock.as_raw_socket() as SOCKET;
     let (level, name, value_be): (i32, i32, u32) = match addr {
-        IpAddr::V4(_) => (IPPROTO_IP as i32, IP_UNICAST_IF as i32, idx.to_be()),
-        IpAddr::V6(_) => (IPPROTO_IPV6 as i32, IPV6_UNICAST_IF as i32, idx),
+        IpAddr::V4(_) => (IPPROTO_IP, IP_UNICAST_IF, idx.to_be()),
+        IpAddr::V6(_) => (IPPROTO_IPV6, IPV6_UNICAST_IF, idx),
     };
     let ret = unsafe {
         setsockopt(
