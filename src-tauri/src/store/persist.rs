@@ -363,11 +363,7 @@ impl super::Store {
 
     /// Return up to `limit` metric samples for `metric`, oldest first (for
     /// EWMA computation). The most recent sample is always the last element.
-    pub fn recent_metric_samples(
-        &self,
-        metric: &str,
-        limit: usize,
-    ) -> Result<Vec<MetricSample>> {
+    pub fn recent_metric_samples(&self, metric: &str, limit: usize) -> Result<Vec<MetricSample>> {
         let guard = self.conn.lock();
         let mut stmt = guard.prepare(
             "SELECT metric, value, sampled_at, label \

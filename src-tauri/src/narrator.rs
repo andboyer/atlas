@@ -67,8 +67,7 @@ pub fn start(
                 break;
             }
 
-            let samples: Vec<LiveSample> =
-                live_ring.read().iter().cloned().collect();
+            let samples: Vec<LiveSample> = live_ring.read().iter().cloned().collect();
             if samples.len() < MIN_SAMPLES {
                 continue;
             }
@@ -86,8 +85,7 @@ pub fn start(
                     }
                 }
 
-                let narrative =
-                    build_heuristic_narrative(&trig, &samples, &wifi_events);
+                let narrative = build_heuristic_narrative(&trig, &samples, &wifi_events);
 
                 // Push to ring + emit immediately so the UI gets the
                 // heuristic instantly.
@@ -106,16 +104,14 @@ pub fn start(
                             && (!needs_key || !api_key.is_empty());
                         if configured {
                             let id = narrative.id.clone();
-                            let prompt =
-                                build_llm_prompt(&trig, &samples, &wifi_events);
+                            let prompt = build_llm_prompt(&trig, &samples, &wifi_events);
                             let ring_clone = Arc::clone(&ring_for_task);
                             let app_clone = app.clone();
                             tokio::spawn(async move {
-                                let messages =
-                                    vec![crate::llm::ChatMessage {
-                                        role: "user".to_string(),
-                                        content: prompt,
-                                    }];
+                                let messages = vec![crate::llm::ChatMessage {
+                                    role: "user".to_string(),
+                                    content: prompt,
+                                }];
                                 let reply = crate::llm::dispatch_public(
                                     &provider,
                                     &api_key,
@@ -142,8 +138,7 @@ pub fn start(
                                         }
                                     }
                                     if let Some(updated) = found {
-                                        let _ =
-                                            app_clone.emit("narrative:update", &updated);
+                                        let _ = app_clone.emit("narrative:update", &updated);
                                     }
                                 } else if let Err(e) = reply {
                                     tracing::debug!(target: "narrator", error = %e, "LLM enrichment failed");
@@ -195,8 +190,7 @@ fn detect_triggers(samples: &[LiveSample]) -> Vec<Trigger> {
         out.push(Trigger {
             trigger: "link_drop".to_string(),
             severity: "critical".to_string(),
-            headline: "The connection dropped — no replies from gateway or internet."
-                .to_string(),
+            headline: "The connection dropped — no replies from gateway or internet.".to_string(),
             at: tail.last().unwrap().ts,
         });
         // No point chaining lesser triggers on a hard drop.
@@ -204,16 +198,24 @@ fn detect_triggers(samples: &[LiveSample]) -> Vec<Trigger> {
     }
 
     // Helpers operating on the last 5s window vs the prior 60s baseline.
-    fn recent_avg(samples: &[LiveSample], n: usize, pick: impl Fn(&LiveSample) -> Option<f32>) -> Option<f32> {
-        let xs: Vec<f32> = samples
-            .iter()
-            .rev()
-            .filter_map(&pick)
-            .take(n)
-            .collect();
-        if xs.is_empty() { None } else { Some(xs.iter().sum::<f32>() / xs.len() as f32) }
+    fn recent_avg(
+        samples: &[LiveSample],
+        n: usize,
+        pick: impl Fn(&LiveSample) -> Option<f32>,
+    ) -> Option<f32> {
+        let xs: Vec<f32> = samples.iter().rev().filter_map(&pick).take(n).collect();
+        if xs.is_empty() {
+            None
+        } else {
+            Some(xs.iter().sum::<f32>() / xs.len() as f32)
+        }
     }
-    fn baseline(samples: &[LiveSample], skip: usize, take: usize, pick: impl Fn(&LiveSample) -> Option<f32>) -> Option<f32> {
+    fn baseline(
+        samples: &[LiveSample],
+        skip: usize,
+        take: usize,
+        pick: impl Fn(&LiveSample) -> Option<f32>,
+    ) -> Option<f32> {
         let xs: Vec<f32> = samples
             .iter()
             .rev()
@@ -221,7 +223,11 @@ fn detect_triggers(samples: &[LiveSample]) -> Vec<Trigger> {
             .skip(skip)
             .take(take)
             .collect();
-        if xs.is_empty() { None } else { Some(xs.iter().sum::<f32>() / xs.len() as f32) }
+        if xs.is_empty() {
+            None
+        } else {
+            Some(xs.iter().sum::<f32>() / xs.len() as f32)
+        }
     }
 
     let now_ts = samples.last().unwrap().ts;
@@ -234,7 +240,11 @@ fn detect_triggers(samples: &[LiveSample]) -> Vec<Trigger> {
         if recent > base + 40.0 && recent > 60.0 {
             out.push(Trigger {
                 trigger: "gateway_spike".to_string(),
-                severity: if recent > 200.0 { "critical".to_string() } else { "warn".to_string() },
+                severity: if recent > 200.0 {
+                    "critical".to_string()
+                } else {
+                    "warn".to_string()
+                },
                 headline: format!(
                     "Gateway latency spiked to {:.0} ms (baseline {:.0} ms).",
                     recent, base
@@ -252,7 +262,11 @@ fn detect_triggers(samples: &[LiveSample]) -> Vec<Trigger> {
         if recent > base + 80.0 && recent > 120.0 {
             out.push(Trigger {
                 trigger: "internet_spike".to_string(),
-                severity: if recent > 300.0 { "critical".to_string() } else { "warn".to_string() },
+                severity: if recent > 300.0 {
+                    "critical".to_string()
+                } else {
+                    "warn".to_string()
+                },
                 headline: format!(
                     "Internet round-trip jumped to {:.0} ms (baseline {:.0} ms).",
                     recent, base
@@ -288,7 +302,11 @@ fn detect_triggers(samples: &[LiveSample]) -> Vec<Trigger> {
         if delta >= 10.0 && r < -65.0 {
             out.push(Trigger {
                 trigger: "rssi_drop".to_string(),
-                severity: if r < -80.0 { "critical".to_string() } else { "warn".to_string() },
+                severity: if r < -80.0 {
+                    "critical".to_string()
+                } else {
+                    "warn".to_string()
+                },
                 headline: format!(
                     "Signal dropped {:.0} dB (now {:.0} dBm, was {:.0} dBm).",
                     delta, r, b
@@ -356,17 +374,13 @@ fn describe_what_happened(
         fmt_f(last.gateway_ms),
         fmt_f(last.internet_ms),
         fmt_f(last.dns_ms),
-        last.rssi_dbm.map(|v| v.to_string()).unwrap_or_else(|| "—".to_string()),
+        last.rssi_dbm
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "—".to_string()),
     ));
     if !wifi_events.is_empty() {
-        let kinds: Vec<String> = wifi_events
-            .iter()
-            .map(|e| e.kind.clone())
-            .collect();
-        parts.push(format!(
-            "Recent Wi-Fi system events: {}.",
-            kinds.join(", ")
-        ));
+        let kinds: Vec<String> = wifi_events.iter().map(|e| e.kind.clone()).collect();
+        parts.push(format!("Recent Wi-Fi system events: {}.", kinds.join(", ")));
     }
     parts.push(format!(
         "Trigger fired: `{}` ({} severity).",
@@ -380,14 +394,22 @@ fn link_drop_explanation(
     wifi_events: &[&WifiEvent],
 ) -> (String, Vec<String>) {
     let mut steps = vec![
-        "Confirm the AP is powered and broadcasting (look for the SSID on another device).".to_string(),
+        "Confirm the AP is powered and broadcasting (look for the SSID on another device)."
+            .to_string(),
         "Toggle Wi-Fi off and on once to force a fresh association.".to_string(),
-        "If the AP is up but you can't see the SSID, move closer or check the radio configuration.".to_string(),
+        "If the AP is up but you can't see the SSID, move closer or check the radio configuration."
+            .to_string(),
     ];
     let mut cause = "All probes are failing — Wi-Fi is associated but the data path is broken, or the radio is no longer associated.".to_string();
-    if wifi_events.iter().any(|e| e.kind == "deauth" || e.kind == "disassoc") {
+    if wifi_events
+        .iter()
+        .any(|e| e.kind == "deauth" || e.kind == "disassoc")
+    {
         cause = "Wi-Fi was just deauth/disassociated by the AP. This often follows a roam decision, AP reboot, or RADIUS failure.".to_string();
-        steps.insert(0, "Check the AP for recent reboots or RADIUS / 802.1X failures in its log.".to_string());
+        steps.insert(
+            0,
+            "Check the AP for recent reboots or RADIUS / 802.1X failures in its log.".to_string(),
+        );
     }
     if let Some(last) = samples.last() {
         if last.rssi_dbm.map(|v| v < -85).unwrap_or(false) {
@@ -417,7 +439,10 @@ fn gateway_spike_explanation(
     }
     if wifi_events.iter().any(|e| e.kind == "roam") {
         cause.push_str(" A Wi-Fi roam happened just before the spike — the new BSSID may be congested or poorly placed.");
-        steps.push("In the Airspace tab, verify the new BSSID's channel and signal vs. the previous one.".to_string());
+        steps.push(
+            "In the Airspace tab, verify the new BSSID's channel and signal vs. the previous one."
+                .to_string(),
+        );
     }
     if last.rssi_dbm.map(|v| v < -72).unwrap_or(false) {
         steps.insert(1, "Signal is weak (< -72 dBm); MAC-layer retries inflate latency. Move closer or add an AP.".to_string());
@@ -482,11 +507,7 @@ fn fmt_f(v: Option<f32>) -> String {
 
 // ─── LLM enrichment prompt ──────────────────────────────────────────────────
 
-fn build_llm_prompt(
-    trig: &Trigger,
-    samples: &[LiveSample],
-    wifi_events: &[WifiEvent],
-) -> String {
+fn build_llm_prompt(trig: &Trigger, samples: &[LiveSample], wifi_events: &[WifiEvent]) -> String {
     let mut lines = vec![
         "You are an expert network engineer. The user's local diagnostic tool detected a Wi-Fi anomaly. \
          Below is the live telemetry and recent Wi-Fi system events around the anomaly. \
@@ -507,7 +528,9 @@ fn build_llm_prompt(
             fmt_f(s.gateway_ms),
             fmt_f(s.internet_ms),
             fmt_f(s.dns_ms),
-            s.rssi_dbm.map(|v| v.to_string()).unwrap_or_else(|| "—".to_string()),
+            s.rssi_dbm
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "—".to_string()),
             s.link_up,
         ));
     }
@@ -540,7 +563,14 @@ fn truncate(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
 
-    fn sample(ts: DateTime<Utc>, gw: Option<f32>, inet: Option<f32>, dns: Option<f32>, rssi: Option<i32>, up: bool) -> LiveSample {
+    fn sample(
+        ts: DateTime<Utc>,
+        gw: Option<f32>,
+        inet: Option<f32>,
+        dns: Option<f32>,
+        rssi: Option<i32>,
+        up: bool,
+    ) -> LiveSample {
         LiveSample {
             ts,
             rssi_dbm: rssi,
@@ -555,16 +585,18 @@ mod tests {
 
     fn good_baseline(count: usize) -> Vec<LiveSample> {
         let now = Utc::now();
-        (0..count).map(|i| {
-            sample(
-                now - Duration::seconds((count - i) as i64),
-                Some(3.0),
-                Some(20.0),
-                Some(15.0),
-                Some(-55),
-                true,
-            )
-        }).collect()
+        (0..count)
+            .map(|i| {
+                sample(
+                    now - Duration::seconds((count - i) as i64),
+                    Some(3.0),
+                    Some(20.0),
+                    Some(15.0),
+                    Some(-55),
+                    true,
+                )
+            })
+            .collect()
     }
 
     #[test]

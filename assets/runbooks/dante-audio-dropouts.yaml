@@ -1,0 +1,67 @@
+id: dante-audio-dropouts
+name: Dante audio dropouts / glitches
+category: av
+applies_to: [dante]
+description: >
+  Investigate audible clicks, pops, or dropouts on Dante (Audinate)
+  audio streams. Checks the physical link, PTP grandmaster stability,
+  DSCP markings, multicast group health, and Dante device discovery.
+symptoms:
+  - "dante audio is dropping out"
+  - "clicks and pops on dante streams"
+  - "dante glitches"
+  - "audio is glitching"
+  - "intermittent audio loss"
+  - "dropouts on dante"
+
+steps:
+  - id: link
+    tool: local.linkaudit
+    args: { iface: "{nic}" }
+    bind: link
+    fail_if: link.verdict == 'error'
+    on_fail: "Could not read link state for {nic}: {link.error}"
+    warn_if: link.duplex == 'half' || (link.link_speed_mbps is not null && link.link_speed_mbps < 100)
+    warn_msg: "Link is unhealthy for Dante: duplex={link.duplex}, speed={link.link_speed_mbps} Mb/s. Dante requires switched, full-duplex, ≥100 Mb/s (1 Gb/s strongly recommended)."
+    note_if: link.eee_enabled == true
+    note_msg: "EEE (802.3az / Energy-Efficient Ethernet) is enabled on this NIC. EEE causes ~30 µs of PTP jitter every time the link wakes — disable it on every switch port and NIC in the audio path."
+
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 8 }
+    bind: ptp
+    fail_if: ptp.verdict == 'error'
+    on_fail: "PTP probe failed: {ptp.error}"
+    warn_if: ptp.competing_gm_observed == true
+    warn_msg: "Multiple PTP grandmasters detected during the listen window. Every BMCA reshuffle causes a momentary audio glitch."
+    branch:
+      - when: ptp.verdict == 'multiple_gms'
+        runbook: ptp-multiple-grandmasters
+      - when: ptp.verdict == 'jittery_sync'
+        runbook: ptp-jittery-sync
+      - when: ptp.verdict == 'silent' || ptp.verdict == 'no_ptp'
+        note: "No PTP traffic observed on {nic}. Either no grandmaster is electing, or the switch is filtering PTP multicast (224.0.1.129 / 224.0.0.107) at the port."
+
+  - id: dscp
+    tool: local.dscp_probe
+    args: { iface: "{nic}", duration_s: 10 }
+    bind: dscp
+    warn_if: dscp.verdict == 'qos_stripped' || dscp.verdict == 'qos_mixed'
+    warn_msg: "DSCP audit reports `{dscp.verdict}`. At least one switch in the audio path is rewriting or stripping QoS markings — Dante audio (EF / DSCP 46) and PTP (CS7 / DSCP 56) must arrive with markings intact."
+    branch:
+      - when: dscp.verdict == 'qos_stripped'
+        runbook: qos-misconfigured
+
+  - id: dante
+    tool: local.dante_browse
+    args: { duration_s: 5 }
+    bind: dante
+    warn_if: length(dante.devices) == 0
+    warn_msg: "No Dante devices discovered via mDNS on {nic}. Verify devices are powered, on the same VLAN, and that mDNS (UDP 5353) is not being blocked."
+
+  - id: mcast
+    tool: local.multicast_groups
+    args: { iface: "{nic}" }
+    bind: mcast
+    note_if: mcast.dante_audio_groups == 0
+    note_msg: "No Dante audio multicast groups (239.69.x.x) joined on {nic}. Either no flows are subscribed, or IGMP snooping on the switch is silently dropping joins."

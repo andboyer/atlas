@@ -23,9 +23,7 @@
 //! mirrored ring buffer that grows incrementally from event ticks.
 
 use crate::collectors::default_collector;
-use crate::probes::reachability::{
-    default_gateway_for_iface, dns_resolve_ms, ping_via,
-};
+use crate::probes::reachability::{default_gateway_for_iface, dns_resolve_ms, ping_via};
 use crate::settings::Settings;
 use crate::types::{LinkStats, LiveSample};
 use chrono::Utc;
@@ -129,7 +127,7 @@ fn spawn_gateway_refresher(
         async fn refresh(
             gw: &Arc<RwLock<Option<String>>>,
             iface: &Arc<RwLock<Option<String>>>,
-            path: &PathBuf,
+            path: &std::path::Path,
         ) {
             let pinned = Settings::load(path)
                 .ok()
@@ -221,15 +219,13 @@ fn spawn_tick(
 
 async fn bounded_ping_via(host: Option<&str>, iface: Option<&str>) -> Option<f32> {
     let host = host?;
-    match timeout(PROBE_BUDGET, ping_via(host, 1, iface)).await {
-        Ok(v) => v,
-        Err(_) => None,
-    }
+    timeout(PROBE_BUDGET, ping_via(host, 1, iface))
+        .await
+        .unwrap_or_default()
 }
 
 async fn bounded_dns(host: &str) -> Option<f32> {
-    match timeout(PROBE_BUDGET, dns_resolve_ms(host)).await {
-        Ok(v) => v,
-        Err(_) => None,
-    }
+    timeout(PROBE_BUDGET, dns_resolve_ms(host))
+        .await
+        .unwrap_or_default()
 }

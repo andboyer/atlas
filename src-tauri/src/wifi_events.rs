@@ -61,9 +61,9 @@ pub fn start(app: AppHandle) -> WifiEventsHandle {
 
 #[cfg(target_os = "macos")]
 fn spawn_macos_log_stream(app: AppHandle, ring: EventRing, running: Arc<AtomicBool>) {
+    use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
-    use std::process::Stdio;
 
     tokio::spawn(async move {
         // Filter to the Wi-Fi-relevant subsystems and process images. Predicate
@@ -78,9 +78,12 @@ fn spawn_macos_log_stream(app: AppHandle, ring: EventRing, running: Arc<AtomicBo
         let mut child = match Command::new("log")
             .args([
                 "stream",
-                "--style", "ndjson",
-                "--level", "info",
-                "--predicate", predicate,
+                "--style",
+                "ndjson",
+                "--level",
+                "info",
+                "--predicate",
+                predicate,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -212,10 +215,7 @@ fn classify(lower: &str) -> &'static str {
         "auth"
     } else if lower.contains("scan") {
         "scan"
-    } else if lower.contains("power")
-        || lower.contains("sleep")
-        || lower.contains("wake")
-    {
+    } else if lower.contains("power") || lower.contains("sleep") || lower.contains("wake") {
         "power"
     } else if lower.contains("kernel") || lower.contains("driver") {
         "kernel"
@@ -276,9 +276,7 @@ fn extract_ssid(message: &str) -> Option<String> {
         // Skip punctuation/whitespace.
         let rest = rest.trim_start_matches([' ', ':', '=', '"', '\'']);
         // Take until next quote or whitespace.
-        let end = rest
-            .find(|c: char| c == '"' || c == '\'' || c == ',' || c == '\n')
-            .unwrap_or(rest.len());
+        let end = rest.find(['"', '\'', ',', '\n']).unwrap_or(rest.len());
         let candidate = rest[..end].trim();
         if !candidate.is_empty() && candidate.len() <= 64 {
             return Some(candidate.to_string());
@@ -515,14 +513,14 @@ fn classify_windows_event_id(id: i64) -> Option<&'static str> {
     // Values cross-referenced against Microsoft docs + real-world logs;
     // unknown IDs fall through to message-based classification.
     match id {
-        8000 | 8001 | 8002 => Some("assoc"),       // connection start / success / failure
-        8003 | 8004 => Some("disassoc"),           // disconnect / disconnect-reason
-        11000..=11010 => Some("roam"),             // roaming start/complete/failure
-        12010..=12013 => Some("auth"),             // 802.1X / EAP
-        20010..=20020 => Some("auth"),             // wireless security
-        4100..=4109 => Some("kernel"),             // native WiFi driver
-        6100..=6109 => Some("scan"),               // scan complete/empty
-        10000..=10003 => Some("power"),            // radio state change
+        8000 | 8001 | 8002 => Some("assoc"), // connection start / success / failure
+        8003 | 8004 => Some("disassoc"),     // disconnect / disconnect-reason
+        11000..=11010 => Some("roam"),       // roaming start/complete/failure
+        12010..=12013 => Some("auth"),       // 802.1X / EAP
+        20010..=20020 => Some("auth"),       // wireless security
+        4100..=4109 => Some("kernel"),       // native WiFi driver
+        6100..=6109 => Some("scan"),         // scan complete/empty
+        10000..=10003 => Some("power"),      // radio state change
         _ => None,
     }
 }

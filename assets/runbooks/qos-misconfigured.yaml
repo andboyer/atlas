@@ -1,0 +1,30 @@
+id: qos-misconfigured
+name: QoS / DSCP not preserved
+category: qos
+applies_to: [dante, aes67, ptp]
+description: >
+  Audio and PTP packets are arriving with stripped or rewritten DSCP
+  values, so the switch is treating them as best-effort under load.
+  Walks the DSCP observations stream by stream and recommends per-
+  vendor QoS recipes.
+symptoms:
+  - "qos misconfigured"
+  - "dscp stripped"
+  - "audio fine on idle network drops under load"
+
+steps:
+  - id: dscp
+    tool: local.dscp_probe
+    args: { iface: "{nic}", duration_s: 12 }
+    bind: dscp
+    fail_if: dscp.verdict == 'error'
+    on_fail: "DSCP probe failed: {dscp.error}"
+    warn_if: dscp.verdict == 'qos_stripped' || dscp.verdict == 'qos_mixed'
+    warn_msg: "DSCP audit verdict `{dscp.verdict}`. Audio/PTP is arriving with stripped or rewritten markings — configure the access switch's `mls qos trust dscp` (Cisco IOS) / `qos trust dscp` (Aruba) on every AV port. `qos_mixed` usually means a single switch in the path is rewriting; walk the path with `local.lldp_probe` to identify it."
+
+  - id: lldp
+    tool: local.lldp_probe
+    args: { iface: "{nic}", duration_s: 35 }
+    bind: lldp
+    note_if: lldp.verdict == 'switch_identified'
+    note_msg: "Upstream switch identified — check its QoS trust state on the port we're plugged into ({lldp.neighbors})."

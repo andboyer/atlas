@@ -50,7 +50,9 @@ pub async fn measure_download_mbps() -> Option<f32> {
     // Client-wide timeout is a safety net only; per-stage timeouts below
     // are tighter and fire first.
     let client = Client::builder()
-        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS + HEADERS_TIMEOUT_SECS + 2))
+        .timeout(Duration::from_secs(
+            DOWNLOAD_TIMEOUT_SECS + HEADERS_TIMEOUT_SECS + 2,
+        ))
         .build()
         .ok()?;
 

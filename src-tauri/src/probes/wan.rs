@@ -123,7 +123,10 @@ mod tests {
             format_region(Some("Seattle"), Some("WA")),
             Some("Seattle, WA".to_string())
         );
-        assert_eq!(format_region(Some("Seattle"), None), Some("Seattle".to_string()));
+        assert_eq!(
+            format_region(Some("Seattle"), None),
+            Some("Seattle".to_string())
+        );
         assert_eq!(format_region(None, None), None);
     }
 

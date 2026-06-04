@@ -26,10 +26,7 @@ pub fn collect_blocking() -> Vec<InterfaceMulticast> {
         }
     };
     if !out.status.success() {
-        tracing::warn!(
-            "netstat -gn exited with status {:?}",
-            out.status.code()
-        );
+        tracing::warn!("netstat -gn exited with status {:?}", out.status.code());
         return Vec::new();
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -108,10 +105,8 @@ fn parse_netstat_g(stdout: &str) -> Vec<InterfaceMulticast> {
     let mut out: Vec<InterfaceMulticast> = by_iface
         .into_iter()
         .map(|(iface, groups)| {
-            let dante_audio_groups = groups
-                .iter()
-                .filter(|g| g.purpose == "dante_audio")
-                .count() as u32;
+            let dante_audio_groups =
+                groups.iter().filter(|g| g.purpose == "dante_audio").count() as u32;
             let ptp_groups = groups.iter().filter(|g| g.purpose == "ptp").count() as u32;
             InterfaceMulticast {
                 iface,

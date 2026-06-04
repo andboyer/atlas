@@ -20,9 +20,7 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use crate::probes::{dante, iface as iface_probe, multicast};
-use crate::types::{
-    AvDiagnosticsResult, AvWarning, DanteDevice, InterfaceMulticast, ScanResult,
-};
+use crate::types::{AvDiagnosticsResult, AvWarning, DanteDevice, InterfaceMulticast, ScanResult};
 
 /// mDNS browse window. Dante devices announce within 1–3s in practice;
 /// 5s is a comfortable upper bound that keeps the UI responsive.
@@ -71,9 +69,7 @@ pub async fn collect(
 
     // Resolve the IPv4 of the pinned interface up-front so the on-Wi-Fi
     // cross-reference and the TCP probe both share one view.
-    let pin_iface_info = pin
-        .as_deref()
-        .and_then(iface_probe::find_by_name);
+    let pin_iface_info = pin.as_deref().and_then(iface_probe::find_by_name);
 
     // Did the user explicitly pin a wired interface? If so the AV tab
     // should not infer any Wi-Fi involvement — the previous behaviour
@@ -95,8 +91,7 @@ pub async fn collect(
         wifi_subnet_from_iface_or_scan(pin_iface_info.as_ref(), last_scan)
     };
     for device in devices.iter_mut() {
-        device.control_ports_open =
-            probe_dante_ports(&device.ip, pin.as_deref()).await;
+        device.control_ports_open = probe_dante_ports(&device.ip, pin.as_deref()).await;
         device.on_wifi = wifi_subnet
             .as_ref()
             .is_some_and(|(net, mask)| ip_in_subnet(&device.ip, *net, *mask));
@@ -109,7 +104,13 @@ pub async fn collect(
         .iter()
         .any(|d| d.services.iter().any(|s| s.contains("_aes67")));
 
-    let warnings = build_warnings(&devices, &multicast, last_scan, pin.as_deref(), pin_is_wired);
+    let warnings = build_warnings(
+        &devices,
+        &multicast,
+        last_scan,
+        pin.as_deref(),
+        pin_is_wired,
+    );
 
     AvDiagnosticsResult {
         generated_at: Utc::now(),
@@ -159,7 +160,11 @@ fn wifi_subnet_from_iface_or_scan(
     if let Some(info) = pin {
         let treat_as_wifi = info.is_wireless.unwrap_or(true);
         if treat_as_wifi {
-            if let Some(ip) = info.ipv4.as_deref().and_then(|s| s.parse::<Ipv4Addr>().ok()) {
+            if let Some(ip) = info
+                .ipv4
+                .as_deref()
+                .and_then(|s| s.parse::<Ipv4Addr>().ok())
+            {
                 return Some((ip, 24));
             }
         }
@@ -225,10 +230,7 @@ fn build_warnings(
     } else {
         // Sample-rate mismatch — Dante devices on different sample rates
         // cannot subscribe to each other.
-        let rates: HashSet<u32> = devices
-            .iter()
-            .filter_map(|d| d.sample_rate_hz)
-            .collect();
+        let rates: HashSet<u32> = devices.iter().filter_map(|d| d.sample_rate_hz).collect();
         if rates.len() > 1 {
             let mut sorted: Vec<u32> = rates.into_iter().collect();
             sorted.sort();
@@ -253,9 +255,7 @@ fn build_warnings(
         if !on_wifi.is_empty() {
             let names = on_wifi
                 .iter()
-                .map(|d| {
-                    d.hostname.clone().unwrap_or_else(|| d.ip.clone())
-                })
+                .map(|d| d.hostname.clone().unwrap_or_else(|| d.ip.clone()))
                 .collect::<Vec<_>>()
                 .join(", ");
             out.push(AvWarning {
@@ -272,7 +272,10 @@ fn build_warnings(
 
         // Redundancy: report distribution if any device has redundancy
         // configured (otherwise silence — most home/small setups are single-NIC).
-        let redundant = devices.iter().filter(|d| d.redundancy == "redundant").count();
+        let redundant = devices
+            .iter()
+            .filter(|d| d.redundancy == "redundant")
+            .count();
         if redundant > 0 {
             let total = devices.len();
             if redundant < total {

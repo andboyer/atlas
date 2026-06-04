@@ -31,12 +31,14 @@ use crate::types::{LinkStats, PhyEfficiency};
 pub fn evaluate(link: &LinkStats) -> Option<PhyEfficiency> {
     let actual = link.tx_rate_mbps?;
     let phy = normalised_phy(link.phy_mode.as_deref(), link.band.as_deref())?;
-    let width = link.channel_width_mhz.unwrap_or(match link.band.as_deref() {
-        Some("2.4") => 20,
-        Some("5") => 80,
-        Some("6") => 160,
-        _ => 20,
-    });
+    let width = link
+        .channel_width_mhz
+        .unwrap_or(match link.band.as_deref() {
+            Some("2.4") => 20,
+            Some("5") => 80,
+            Some("6") => 160,
+            _ => 20,
+        });
     let theoretical = theoretical_max(phy, width)?;
     let efficiency = (actual / theoretical).clamp(0.0, 1.0);
     let grade = match efficiency {

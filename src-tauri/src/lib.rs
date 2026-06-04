@@ -11,6 +11,7 @@ pub mod probes;
 mod process_util;
 pub mod profiles;
 mod recommend;
+pub mod runbook;
 mod sampler;
 pub mod settings;
 mod store;
@@ -123,6 +124,9 @@ pub fn run() {
             commands::get_roaming_history,
             commands::export_report,
             commands::check_for_update,
+            commands::list_runbooks,
+            commands::pick_runbook,
+            commands::run_runbook,
             ollama_install::check_ollama_status,
             ollama_install::install_ollama,
             ollama_install::launch_ollama,

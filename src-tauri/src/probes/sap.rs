@@ -65,9 +65,8 @@ fn listen_for_sap(iface: &str, listen_secs: u32) -> anyhow::Result<SapProbeResul
     while Instant::now() < deadline {
         match sock.recv_from(&mut buf) {
             Ok((n, from)) => {
-                let data: &[u8] = unsafe {
-                    std::slice::from_raw_parts(buf.as_ptr() as *const u8, n)
-                };
+                let data: &[u8] =
+                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
                 let src_ip = from
                     .as_socket_ipv4()
                     .map(|a| a.ip().to_string())

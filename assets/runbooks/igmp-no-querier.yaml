@@ -1,0 +1,31 @@
+id: igmp-no-querier
+name: No IGMP querier on the AV VLAN
+category: multicast
+applies_to: [dante, aes67, multicast]
+description: >
+  Without an active IGMP querier, switches with IGMP snooping enabled
+  silently drop multicast subscriptions and audio stops within ~260
+  seconds (default group-membership timeout). Either elect a querier
+  (Layer-3 switch, dedicated host) or disable snooping on the VLAN.
+symptoms:
+  - "no igmp querier"
+  - "audio stops after a few minutes"
+  - "multicast stops working after a while"
+  - "igmp snooping breaking dante"
+
+steps:
+  - id: igmp
+    tool: local.igmp_listen
+    args: { iface: "{nic}", duration_s: 35 }
+    bind: igmp
+    note_if: igmp.verdict == 'not_implemented'
+    note_msg: "Privileged IGMP listener is not yet shipped in this Atlas build — the next release adds it. Until then, validate from the switch side: `show ip igmp snooping querier vlan <id>` (Cisco) / `show igmp snooping querier` (Aruba) / Layer-3 device should be the elected querier with an IP in the VLAN."
+    warn_if: igmp.verdict == 'no_querier_observed'
+    warn_msg: "No IGMP queries seen on {nic} during the listen window. Switches with IGMP snooping will silently drop joins for Dante (239.69.x.x) / AES67 (239.x.x.x) audio after ~260 s, causing audio to stop. Elect a querier on this VLAN."
+
+  - id: mcast
+    tool: local.multicast_groups
+    args: { iface: "{nic}" }
+    bind: mcast
+    note_if: mcast.group_count == 0
+    note_msg: "No multicast groups joined on {nic} at all — symptom of a snooping switch that has already aged out our subscriptions."

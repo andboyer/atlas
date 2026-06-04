@@ -1,0 +1,25 @@
+id: ptp-domain-mismatch
+name: PTP domain mismatch
+category: ptp
+applies_to: [ptp, dante, aes67]
+description: >
+  Devices are running PTP on different domain numbers, so they cannot
+  synchronise. Dante defaults to domain 0 (and historically 4 on
+  older firmware); AES67 / SMPTE 2059-2 also use domain 0 (media
+  profile). Identifies mismatches and lists the domains in use.
+symptoms:
+  - "ptp domain mismatch"
+  - "devices on different ptp domains"
+  - "dante not syncing with aes67"
+
+steps:
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 10 }
+    bind: ptp
+    fail_if: ptp.verdict == 'error'
+    on_fail: "PTP probe failed: {ptp.error}"
+    warn_if: length(ptp.domains) > 1
+    warn_msg: "Multiple PTP domains observed on {nic}. Pick one (recommended: domain 0 = AES67 / SMPTE 2059-2 media profile) and configure every device to it."
+    note_if: ptp.verdict == 'silent' || ptp.verdict == 'no_ptp'
+    note_msg: "No PTP traffic observed — domain mismatch is unlikely. Check that PTP is enabled and that the switch is not filtering UDP 319/320."

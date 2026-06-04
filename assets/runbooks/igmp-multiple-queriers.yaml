@@ -1,0 +1,23 @@
+id: igmp-multiple-queriers
+name: Multiple IGMP queriers on the AV VLAN
+category: multicast
+applies_to: [dante, aes67, multicast]
+description: >
+  Two or more IGMP queriers are active on the same VLAN. The lowest-IP
+  querier wins the election; the others stop sending queries but their
+  presence indicates a topology mistake that frequently coincides with
+  asymmetric multicast forwarding.
+symptoms:
+  - "multiple igmp queriers"
+  - "competing igmp queriers"
+  - "multicast dropouts after switch change"
+
+steps:
+  - id: igmp
+    tool: local.igmp_listen
+    args: { iface: "{nic}", duration_s: 35 }
+    bind: igmp
+    note_if: igmp.verdict == 'not_implemented'
+    note_msg: "Privileged IGMP listener is not yet shipped in this Atlas build. Until then, identify queriers from the switch side: `show ip igmp snooping querier vlan <id>` and confirm only ONE IP is listed as the elected querier."
+    warn_if: length(igmp.queriers_seen) > 1
+    warn_msg: "{length(igmp.queriers_seen)} IGMP queriers seen on {nic}. Lowest-IP wins; the others should be silenced (`no ip igmp snooping querier` on Cisco / `igmp-snooping querier disable` on Aruba) to avoid asymmetric multicast forwarding bugs."

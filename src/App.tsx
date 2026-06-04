@@ -12,6 +12,7 @@ import {
   Wrench,
   Bell,
   Waves,
+  Stethoscope,
 } from "lucide-react";
 import { StatusCard } from "./components/StatusCard";
 import { KpiRow } from "./components/KpiRow";
@@ -46,6 +47,7 @@ import { LiveMetricsChart } from "./components/LiveMetricsChart";
 import { NarrativePanel } from "./components/NarrativePanel";
 import { StressTestPanel } from "./components/StressTestPanel";
 import { WifiEventsTimeline } from "./components/WifiEventsTimeline";
+import { RunbooksPanel } from "./components/RunbooksPanel";
 import { useApp } from "./store";
 
 type TabId =
@@ -54,6 +56,7 @@ type TabId =
   | "network"
   | "airspace"
   | "av"
+  | "runbooks"
   | "devices"
   | "activity"
   | "tools"
@@ -202,6 +205,11 @@ function App() {
       id: "av",
       label: "AV / Multicast",
       icon: <Waves className="h-4 w-4" />,
+    },
+    {
+      id: "runbooks",
+      label: "Runbooks",
+      icon: <Stethoscope className="h-4 w-4" />,
     },
     {
       id: "devices",
@@ -379,6 +387,8 @@ function App() {
             )}
 
             {activeTab === "av" && <AvDiagnostics />}
+
+            {activeTab === "runbooks" && <RunbooksPanel />}
 
             {activeTab === "devices" && (
               <section>

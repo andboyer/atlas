@@ -1,0 +1,38 @@
+id: dante-latency-too-high
+name: Dante latency profile too high / mismatched
+category: av
+applies_to: [dante]
+description: >
+  Diagnose excessive end-to-end latency on Dante streams. Checks the
+  per-device latency profile, link health, and PTP sync interval
+  (longer sync intervals require longer latency).
+symptoms:
+  - "dante latency too high"
+  - "dante audio delayed"
+  - "dante latency mismatch"
+  - "monitor latency on dante"
+
+steps:
+  - id: dante
+    tool: local.dante_browse
+    args: { duration_s: 6 }
+    bind: dante
+    warn_if: length(dante.devices) == 0
+    warn_msg: "No Dante devices discovered — cannot evaluate latency profiles."
+
+  - id: link
+    tool: local.linkaudit
+    args: { iface: "{nic}" }
+    bind: link
+    warn_if: link.link_speed_mbps is not null && link.link_speed_mbps < 1000
+    warn_msg: "NIC is operating at {link.link_speed_mbps} Mb/s. Latencies below 1 ms on Dante require gigabit (or faster) end-to-end."
+
+  - id: ptp
+    tool: local.ptp_probe
+    args: { iface: "{nic}", duration_s: 8 }
+    bind: ptp
+    note_if: ptp.sync_jitter_us is not null && ptp.sync_jitter_us > 250
+    note_msg: "PTP sync jitter is {ptp.sync_jitter_us} µs — high jitter forces Dante's clock-recovery to widen its latency budget, so the effective latency is higher than the configured profile."
+    branch:
+      - when: ptp.competing_gm_observed == true
+        note: "Competing PTP grandmasters cause periodic latency bumps as receivers re-lock."

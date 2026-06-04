@@ -140,8 +140,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("nonexistent.json");
         let s = Settings::load(&path).unwrap();
-        assert_eq!(s.scan_interval_secs, 120);
-        assert!(!s.monitoring_enabled);
+        let d = Settings::default();
+        assert_eq!(s.scan_interval_secs, d.scan_interval_secs);
+        assert_eq!(s.monitoring_enabled, d.monitoring_enabled);
     }
 
     #[test]

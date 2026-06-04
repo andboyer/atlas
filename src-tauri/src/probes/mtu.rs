@@ -21,7 +21,7 @@ pub async fn discover_mtu() -> Option<u32> {
     // Try to reach the internet; fall back to local gateway.
     let target = "1.1.1.1";
 
-    let mut lo: u32 = 576;  // minimum IP MTU per RFC 791
+    let mut lo: u32 = 576; // minimum IP MTU per RFC 791
     let mut hi: u32 = 1500; // standard Ethernet MTU
 
     // Quick sanity: if even the smallest packet fails, we have no connectivity.
@@ -90,10 +90,7 @@ async fn ping_size(host: &str, mtu: u32) -> bool {
 
     let result = timeout(
         Duration::from_secs(5),
-        Command::new("ping")
-            .no_console()
-            .args(&args)
-            .output(),
+        Command::new("ping").no_console().args(&args).output(),
     )
     .await;
 

@@ -82,9 +82,8 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
             let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
             match sock.recv_from(&mut buf) {
                 Ok((n, from)) => {
-                    let data: &[u8] = unsafe {
-                        std::slice::from_raw_parts(buf.as_ptr() as *const u8, n)
-                    };
+                    let data: &[u8] =
+                        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
                     if let Some(msg) = parse_ptp(data) {
                         let key = (msg.domain, msg.version);
                         let entry = by_key.entry(key).or_insert_with(|| DomainAcc {
@@ -174,13 +173,9 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
             .collect();
 
         let profile = classify_profile(acc.version, acc.log_announce, acc.log_sync);
-        let transport = if acc.saw_p2p && !acc.saw_e2e {
-            "ipv4_multicast"
-        } else if acc.saw_e2e || acc.saw_p2p {
-            "ipv4_multicast"
-        } else {
-            "ipv4_multicast"
-        };
+        // PTPv2 over UDP always presents as `ipv4_multicast` in this probe;
+        // distinguishing P2P vs E2E delay mechanism is captured separately.
+        let transport = "ipv4_multicast";
 
         domains.push(PtpDomain {
             domain_number: acc.domain,
@@ -199,9 +194,10 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
         "no_ptp".to_string()
     } else if competing {
         "multiple_gms".to_string()
-    } else if domains.iter().any(|d| {
-        d.sync_jitter_us.map_or(false, |j| j > 1000.0)
-    }) {
+    } else if domains
+        .iter()
+        .any(|d| d.sync_jitter_us.is_some_and(|j| j > 1000.0))
+    {
         "jittery_sync".to_string()
     } else if total_gm > 0 {
         "stable_gm".to_string()
@@ -261,11 +257,7 @@ fn sync_jitter_us(arrivals: &[Instant]) -> Option<f32> {
         .collect();
     let n = gaps_us.len() as f64;
     let mean = gaps_us.iter().sum::<f64>() / n;
-    let var = gaps_us
-        .iter()
-        .map(|x| (x - mean).powi(2))
-        .sum::<f64>()
-        / n;
+    let var = gaps_us.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n;
     Some(var.sqrt() as f32)
 }
 
@@ -274,9 +266,7 @@ fn classify_profile(version: u8, log_announce: i8, log_sync: i8) -> String {
     // log -4 = 62.5ms) and fast Announce (log -2 = 250ms, log -1 = 500ms).
     if version == 2 && log_sync <= -2 && log_announce <= 0 {
         "media".to_string()
-    } else if version == 2 {
-        "default".to_string()
-    } else if version == 1 {
+    } else if version == 1 || version == 2 {
         "default".to_string()
     } else {
         "unknown".to_string()

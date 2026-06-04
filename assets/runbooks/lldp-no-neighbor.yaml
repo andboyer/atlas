@@ -1,0 +1,28 @@
+id: lldp-no-neighbor
+name: Identify upstream switch (LLDP / CDP)
+category: discovery
+applies_to: [generic]
+description: >
+  Listen for LLDP / CDP frames to identify which switch and port the
+  selected NIC is connected to. Useful as a building block for any
+  "find which switch is misbehaving" investigation.
+symptoms:
+  - "which switch am I plugged into"
+  - "identify upstream switch"
+  - "lldp neighbor"
+  - "where am I connected"
+
+steps:
+  - id: link
+    tool: local.linkaudit
+    args: { iface: "{nic}" }
+    bind: link
+
+  - id: lldp
+    tool: local.lldp_probe
+    args: { iface: "{nic}", duration_s: 35 }
+    bind: lldp
+    warn_if: lldp.verdict == 'silent'
+    warn_msg: "No LLDP/CDP frames seen on {nic} in 35 s. Either the switch is not advertising (most consumer/dumb switches don't), or the switch port has LLDP disabled — enable `lldp run` (Cisco) / `lldp` (Aruba)."
+    note_if: lldp.verdict == 'not_supported'
+    note_msg: "L2 capture is not supported on this OS without elevation. On macOS, grant Atlas full disk access + run elevated for LLDP capture; on Linux, run with cap_net_raw; on Windows we fall back to ARP/OUI which only identifies the switch vendor, not the port."

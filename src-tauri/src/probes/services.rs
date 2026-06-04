@@ -46,7 +46,9 @@ async fn probe_one(target: &str) -> ServiceProbe {
     // DNS resolve (offload to blocking thread since to_socket_addrs is sync).
     let target_clone = target_with_port.clone();
     let resolved = tokio::task::spawn_blocking(move || {
-        target_clone.to_socket_addrs().map(|i| i.collect::<Vec<_>>())
+        target_clone
+            .to_socket_addrs()
+            .map(|i| i.collect::<Vec<_>>())
     })
     .await;
 

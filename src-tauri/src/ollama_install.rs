@@ -124,11 +124,7 @@ pub async fn check_ollama_status(base_url: Option<String>) -> OllamaStatus {
             .json::<serde_json::Value>()
             .await
             .ok()
-            .and_then(|v| {
-                v.get("version")
-                    .and_then(|s| s.as_str())
-                    .map(String::from)
-            }),
+            .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(String::from)),
         None => None,
     };
 
@@ -215,7 +211,10 @@ pub async fn launch_ollama() -> Result<(), String> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Err("In-app launch is unsupported on this platform; run `ollama serve` in a terminal.".into())
+        Err(
+            "In-app launch is unsupported on this platform; run `ollama serve` in a terminal."
+                .into(),
+        )
     }
 }
 
@@ -230,7 +229,9 @@ fn windows_ollama_candidates() -> Vec<std::path::PathBuf> {
                 .join("ollama.exe"),
         );
     }
-    out.push(std::path::PathBuf::from(r"C:\Program Files\Ollama\ollama.exe"));
+    out.push(std::path::PathBuf::from(
+        r"C:\Program Files\Ollama\ollama.exe",
+    ));
     out
 }
 
