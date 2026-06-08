@@ -71,7 +71,7 @@ impl Registry {
         r.register(Arc::new(ReachabilityTool));
         r.register(Arc::new(PingTool));
         r.register(Arc::new(GatewayTool));
-        r.register(Arc::new(IgmpListenStubTool));
+        r.register(Arc::new(IgmpListenTool));
         r
     }
 
@@ -342,32 +342,70 @@ impl Tool for GatewayTool {
     }
 }
 
-/// Stub for the IGMP listener — the real probe lands in Phase 2 alongside
-/// SSH transport. Until then this tool returns a "not_implemented" verdict
-/// that runbooks can branch on to keep their flow intact.
-pub struct IgmpListenStubTool;
+/// Privileged IGMP listener. Re-execs the current binary under
+/// platform-native elevation (macOS osascript / Windows UAC / Linux
+/// pkexec) and parses the resulting `IgmpProbeResult`. If elevation
+/// fails or is cancelled, falls back to a `verdict: "not_implemented"`
+/// JSON shape so YAML runbooks' `note_if: igmp.verdict ==
+/// 'not_implemented'` guards still fire and the engine treats the step
+/// as `StepStatus::NotImplemented` rather than a hard error.
+pub struct IgmpListenTool;
 #[async_trait]
-impl Tool for IgmpListenStubTool {
+impl Tool for IgmpListenTool {
     fn id(&self) -> &'static str {
         "local.igmp_listen"
     }
     fn description(&self) -> &'static str {
-        "Listen on a raw IGMP socket for queriers / reports / leaves (stubbed in v0.2.0)."
+        "Listen on a raw IGMP socket for queriers / reports / leaves. \
+         Requires administrator authorisation (UAC / pkexec / osascript)."
     }
-    async fn run(&self, args: Value, _ctx: &ToolContext) -> Result<Value, ToolError> {
-        // We deliberately succeed (not Err) and emit a well-known verdict so
-        // runbooks render a polite "feature pending" note instead of a
-        // hard step error. Mirrors the shape the real probe will return.
-        let iface = arg_str_opt(&args, "iface").unwrap_or_default();
-        Ok(json!({
-            "iface": iface,
-            "listen_secs": 0,
-            "queriers_seen": [],
-            "reports_seen": 0,
-            "leaves_seen": 0,
-            "verdict": "not_implemented",
-            "error": null,
-            "note": "Privileged IGMP listener lands in the next release. Connect a managed-switch host to validate snooping/querier health from the switch side."
-        }))
+    async fn run(&self, args: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let iface = resolve_iface(&args, ctx)?;
+        // 130 s catches an RFC-3376 default querier (General Query
+        // every 125 s) with ~5 s of slack. Clamp at 180 s so an
+        // operator-supplied value can't sit holding the elevation
+        // dialog open for an unreasonable window.
+        let secs = arg_u32(&args, "duration_s", 130).clamp(1, 180);
+        let exe = match std::env::current_exe() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => {
+                return Ok(json!({
+                    "iface": iface,
+                    "listen_secs": 0,
+                    "queriers_seen": [],
+                    "reports_seen": 0,
+                    "leaves_seen": 0,
+                    "verdict": "not_implemented",
+                    "error": format!("locate current exe: {e}"),
+                    "note": "Could not resolve the Atlas binary path; the privileged IGMP listener was skipped."
+                }));
+            }
+        };
+        match crate::probes::elevate::elevate_and_run_probe(&exe, "igmp-listen", &iface, secs).await
+        {
+            Ok(raw) => match serde_json::from_str::<Value>(raw.trim()) {
+                Ok(v) => Ok(v),
+                Err(e) => Ok(json!({
+                    "iface": iface,
+                    "listen_secs": 0,
+                    "queriers_seen": [],
+                    "reports_seen": 0,
+                    "leaves_seen": 0,
+                    "verdict": "not_implemented",
+                    "error": format!("parse IgmpProbeResult: {e}"),
+                    "note": "The privileged IGMP listener returned a non-JSON payload."
+                })),
+            },
+            Err(e) => Ok(json!({
+                "iface": iface,
+                "listen_secs": 0,
+                "queriers_seen": [],
+                "reports_seen": 0,
+                "leaves_seen": 0,
+                "verdict": "not_implemented",
+                "error": e,
+                "note": "Privileged IGMP listener was unavailable or declined; runbook continued without switch-side data."
+            })),
+        }
     }
 }

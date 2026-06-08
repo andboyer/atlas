@@ -152,7 +152,10 @@ pub enum StepStatus {
     Skipped,
     /// Tool itself errored.
     Error,
-    /// Tool is not yet implemented (e.g. IGMP listener landing in phase 2).
+    /// Tool ran but reported it could not execute in this build /
+    /// environment (e.g. operator declined the elevation prompt, or a
+    /// platform-specific capability is unavailable). Runbooks branch on
+    /// this verdict via `note_if` so flow continues with reduced data.
     NotImplemented,
 }
 
