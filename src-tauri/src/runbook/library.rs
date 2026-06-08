@@ -89,6 +89,48 @@ impl Library {
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }
+
+    /// Merge user-authored YAML files from `dir/*.yaml` on top of any
+    /// already-loaded runbooks. Entries with the same `id` override the
+    /// bundled version — operators editing a copy of a shipped runbook
+    /// don't have to rename it for the override to take effect.
+    pub fn merge_dir(&mut self, dir: &std::path::Path) {
+        let read = match std::fs::read_dir(dir) {
+            Ok(r) => r,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!("user-runbook dir `{}`: {e}", dir.display());
+                }
+                return;
+            }
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            let is_yaml = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"))
+                .unwrap_or(false);
+            if !is_yaml {
+                continue;
+            }
+            let src = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("failed to read user runbook `{}`: {e}", path.display());
+                    continue;
+                }
+            };
+            match serde_yaml_ng::from_str::<Runbook>(&src) {
+                Ok(rb) => {
+                    self.by_id.insert(rb.id.clone(), rb);
+                }
+                Err(e) => {
+                    warn!("failed to parse user runbook `{}`: {e}", path.display());
+                }
+            }
+        }
+    }
 }
 
 pub fn load_bundled() -> Library {

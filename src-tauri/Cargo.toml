@@ -1,6 +1,6 @@
 [package]
 name = "atlas"
-version = "0.2.1"
+version = "0.2.2"
 description = "Atlas — AI-assisted Wi-Fi & LAN diagnostics"
 authors = ["Andre Boyer"]
 edition = "2021"
@@ -30,7 +30,7 @@ once_cell = "1"
 parking_lot = "0.12"
 
 mdns-sd = "0.11"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies"] }
 sha2 = "0.10"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
@@ -43,6 +43,26 @@ libc = "0.2"
 # the broader Rust ecosystem post-archive. We parse runbooks once at startup,
 # so runtime cost is negligible.
 serde_yaml_ng = "0.10"
+
+# Skill-pack catalogues + host inventory are TOML on disk. `toml` 0.8 ships a
+# stable typed deserializer with good error messages.
+toml = "0.8"
+
+# OS keychain for switch/controller credentials (Phase 2). `keyring` v3 uses
+# Keychain on macOS, Credential Manager on Windows, and Secret Service on
+# Linux (with kwallet fallback). No credentials live in settings.json or in
+# the agent prompt — the runbook engine receives a host *handle*, not a
+# password.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+
+# Hand-rolled per-skill-pack output parsers use named-capture regex.
+regex = "1"
+
+# HTTPS controllers (TP-Link Omada, UniFi, Luminex GigaCore) are stateful —
+# the controller hands back a session cookie on login that needs to ride on
+# every subsequent request. `reqwest_cookie_store` keeps the jar per-host
+# without breaking reqwest's existing rustls config.
+reqwest_cookie_store = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

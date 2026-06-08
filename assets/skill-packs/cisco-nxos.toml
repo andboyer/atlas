@@ -1,0 +1,87 @@
+# Cisco Nexus / NX-OS skill pack.
+id = "cisco-nxos"
+name = "Cisco Nexus (NX-OS)"
+transport = "ssh"
+description = "AV-focused read commands for NX-OS switches (Nexus 3K/9K)."
+
+[[command]]
+id = "show_interfaces"
+risk = "read"
+template = "show interface {iface}"
+purpose = "Per-interface counters and state."
+parser = ""
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "show_vlan_brief"
+risk = "read"
+template = "show vlan brief"
+purpose = "VLAN id / name / port membership."
+parser = ""
+
+[[command]]
+id = "show_mac_address_table"
+risk = "read"
+template = "show mac address-table"
+purpose = "Dynamic MAC learning."
+parser = ""
+
+[[command]]
+id = "igmp_snooping_status"
+risk = "read"
+template = "show ip igmp snooping"
+purpose = "Global IGMP snooping summary."
+parser = ""
+
+[[command]]
+id = "igmp_snooping_groups"
+risk = "read"
+template = "show ip igmp snooping groups vlan {vlan}"
+purpose = "Group membership per VLAN."
+parser = ""
+  [[command.args]]
+  name = "vlan"
+  type = "vlan_id"
+  required = true
+
+[[command]]
+id = "show_ptp_brief"
+risk = "read"
+template = "show ptp brief"
+purpose = "Per-port PTP role + clock id."
+parser = ""
+
+[[command]]
+id = "show_ptp_clock"
+risk = "read"
+template = "show ptp clock"
+purpose = "PTP clock identity + grandmaster summary."
+parser = ""
+
+[[command]]
+id = "show_lldp_neighbors"
+risk = "read"
+template = "show lldp neighbors detail"
+purpose = "LLDP peers detail."
+parser = ""
+
+[[command]]
+id = "show_version"
+risk = "read"
+template = "show version"
+purpose = "Software / hardware identification."
+parser = ""
+
+[[command]]
+id = "ping_target"
+risk = "read"
+template = "ping {ip} count 5"
+purpose = "ICMP reachability."
+parser = ""
+  [[command.args]]
+  name = "ip"
+  type = "ipv4"
+  required = true

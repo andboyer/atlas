@@ -1,0 +1,166 @@
+# Cisco IOS / IOS-XE skill pack.
+#
+# All commands are Read-risk in v1. The Mutate / Dangerous tier (port
+# bounce, snooping toggle, running-config write) is wired in Phase 6 with
+# approval gating.
+id = "cisco-ios"
+name = "Cisco IOS / IOS-XE"
+transport = "ssh"
+description = "AV-focused read commands for Catalyst / IOS-XE switches."
+
+[[command]]
+id = "show_interfaces"
+risk = "read"
+template = "show interfaces {iface}"
+purpose = "Per-interface speed, duplex, errors, line protocol."
+parser = "cisco_ios_show_interfaces"
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "show_vlan_brief"
+risk = "read"
+template = "show vlan brief"
+purpose = "VLAN id / name / port membership snapshot."
+parser = ""
+
+[[command]]
+id = "show_mac_address_table_dynamic"
+risk = "read"
+template = "show mac address-table dynamic"
+purpose = "Dynamic MAC learning — diagnose flapping or missing endpoints."
+parser = ""
+
+[[command]]
+id = "igmp_snooping_status"
+risk = "read"
+template = "show ip igmp snooping"
+purpose = "Global IGMP snooping on/off + per-VLAN summary."
+parser = "cisco_ios_show_ip_igmp_snooping"
+
+[[command]]
+id = "igmp_snooping_mrouter"
+risk = "read"
+template = "show ip igmp snooping mrouter"
+purpose = "Multicast router ports learned by snooping."
+parser = ""
+
+[[command]]
+id = "igmp_snooping_groups"
+risk = "read"
+template = "show ip igmp snooping groups vlan {vlan}"
+purpose = "Active multicast group joins on a VLAN."
+parser = "cisco_ios_show_ip_igmp_snooping_groups"
+  [[command.args]]
+  name = "vlan"
+  type = "vlan_id"
+  required = true
+
+[[command]]
+id = "igmp_querier_status"
+risk = "read"
+template = "show ip igmp snooping querier"
+purpose = "Snooping-querier address / version / interval per VLAN."
+parser = "cisco_ios_show_ip_igmp_snooping_querier"
+
+[[command]]
+id = "pim_neighbor"
+risk = "read"
+template = "show ip pim neighbor"
+purpose = "PIM adjacencies (L3 multicast diagnosis)."
+parser = ""
+
+[[command]]
+id = "show_ptp_clock"
+risk = "read"
+template = "show ptp clock"
+purpose = "PTP domain, priority, mode, grandmaster identity."
+parser = "cisco_ios_show_ptp_clock"
+
+[[command]]
+id = "show_ptp_port"
+risk = "read"
+template = "show ptp port"
+purpose = "Per-port PTP state (master/slave/passive/disabled)."
+parser = ""
+
+[[command]]
+id = "show_ptp_parent"
+risk = "read"
+template = "show ptp parent"
+purpose = "Identify the upstream PTP master / GM observed from this clock."
+parser = ""
+
+[[command]]
+id = "qos_queue_stats"
+risk = "read"
+template = "show mls qos interface {iface}"
+purpose = "Priority-queue drops + DSCP trust state on an interface."
+parser = "cisco_ios_show_mls_qos_interface"
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "platform_qos_queue_stats"
+risk = "read"
+template = "show platform qos queue stats {iface}"
+purpose = "Newer IOS-XE platforms: per-queue tx/drop counters."
+parser = ""
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "show_logging_av"
+risk = "read"
+template = "show logging | include IGMP|PTP|QoS|err-disable"
+purpose = "Filtered syslog lines for AV-relevant events."
+parser = ""
+
+[[command]]
+id = "show_lldp_neighbors_detail"
+risk = "read"
+template = "show lldp neighbors detail"
+purpose = "Direct LLDP peers — system name, chassis id, port id."
+parser = "cisco_ios_show_lldp_neighbors_detail"
+
+[[command]]
+id = "show_version"
+risk = "read"
+template = "show version"
+purpose = "Software / hardware identification."
+parser = ""
+
+[[command]]
+id = "show_running_config_partial"
+risk = "read"
+template = "show running-config interface {iface}"
+purpose = "Per-interface running config (no global secrets exposed)."
+parser = ""
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "show_arp"
+risk = "read"
+template = "show arp"
+purpose = "ARP cache snapshot — find a host's L2 location."
+parser = ""
+
+[[command]]
+id = "ping_target"
+risk = "read"
+template = "ping {ip} repeat 5 timeout 1"
+purpose = "ICMP reachability from this switch."
+parser = ""
+  [[command.args]]
+  name = "ip"
+  type = "ipv4"
+  required = true

@@ -1,0 +1,69 @@
+# Ubiquiti UniFi controller skill pack (HTTPS REST).
+#
+# Talks to a self-hosted UniFi Network controller (or a UniFi OS console).
+# All endpoints are GETs; v1 ships login + a handful of read endpoints.
+id = "unifi"
+name = "Ubiquiti UniFi Controller"
+transport = "https"
+description = "Read endpoints on a UniFi Network controller."
+
+[login]
+path = "/api/login"
+username_field = "username"
+password_field = "password"
+
+[[command]]
+id = "list_sites"
+risk = "read"
+template = "/api/self/sites"
+method = "GET"
+purpose = "Sites available to the current user."
+parser = ""
+
+[[command]]
+id = "list_devices"
+risk = "read"
+template = "/api/s/{site}/stat/device"
+method = "GET"
+purpose = "Adopted devices (switches, APs, gateways)."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true
+
+[[command]]
+id = "list_clients"
+risk = "read"
+template = "/api/s/{site}/stat/sta"
+method = "GET"
+purpose = "Connected wireless + wired clients."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true
+
+[[command]]
+id = "list_health"
+risk = "read"
+template = "/api/s/{site}/stat/health"
+method = "GET"
+purpose = "Per-subsystem health (WLAN/WAN/LAN/VPN)."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true
+
+[[command]]
+id = "list_events"
+risk = "read"
+template = "/api/s/{site}/stat/event"
+method = "GET"
+purpose = "Recent event log."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true

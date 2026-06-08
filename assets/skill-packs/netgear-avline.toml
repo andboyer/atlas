@@ -1,0 +1,69 @@
+# NETGEAR AV Line (M4250 / M4350) skill pack.
+#
+# The AV Line ships with a Cisco-flavoured CLI over SSH. We expose the
+# AV-relevant read commands; in Phase 6 we'll add the M4250's REST endpoint
+# for profile push (Mutate, approval-gated).
+id = "netgear-avline"
+name = "NETGEAR AV Line (M4250/M4350)"
+transport = "ssh"
+description = "AV-focused read commands for NETGEAR AV Line CLI."
+
+[[command]]
+id = "show_interface"
+risk = "read"
+template = "show interface {iface}"
+purpose = "Per-interface counters and link state."
+parser = ""
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "show_vlan"
+risk = "read"
+template = "show vlan"
+purpose = "VLAN id / name / membership."
+parser = ""
+
+[[command]]
+id = "show_mac_addr_table"
+risk = "read"
+template = "show mac-addr-table"
+purpose = "Dynamic MAC learning."
+parser = ""
+
+[[command]]
+id = "igmp_snooping_status"
+risk = "read"
+template = "show ip igmp snooping"
+purpose = "Snooping enable + querier summary."
+parser = ""
+
+[[command]]
+id = "igmp_snooping_groups"
+risk = "read"
+template = "show ip igmp snooping mrouter interface all"
+purpose = "Multicast router ports."
+parser = ""
+
+[[command]]
+id = "show_ptp"
+risk = "read"
+template = "show ptp"
+purpose = "PTP clock + per-port state."
+parser = ""
+
+[[command]]
+id = "show_lldp_neighbors"
+risk = "read"
+template = "show lldp remote-device all"
+purpose = "LLDP peers."
+parser = ""
+
+[[command]]
+id = "show_version"
+risk = "read"
+template = "show version"
+purpose = "Software / hardware identification."
+parser = ""

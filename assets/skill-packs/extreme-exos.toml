@@ -1,0 +1,76 @@
+# Extreme Networks EXOS skill pack (Summit / X-series).
+id = "extreme-exos"
+name = "Extreme EXOS"
+transport = "ssh"
+description = "AV-focused read commands for Extreme EXOS switches."
+
+[[command]]
+id = "show_ports"
+risk = "read"
+template = "show ports {iface} information detail"
+purpose = "Port speed / duplex / link / error counters."
+parser = ""
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "show_vlan"
+risk = "read"
+template = "show vlan"
+purpose = "VLAN list, tag, port membership."
+parser = ""
+
+[[command]]
+id = "show_fdb"
+risk = "read"
+template = "show fdb"
+purpose = "Forwarding DB (MAC table)."
+parser = ""
+
+[[command]]
+id = "igmp_snooping_status"
+risk = "read"
+template = "show igmp snooping"
+purpose = "Snooping mode + VLAN summary."
+parser = "extreme_show_igmp_snooping"
+
+[[command]]
+id = "show_igmp_snooping_vlan"
+risk = "read"
+template = "show igmp snooping vlan {vlan_name}"
+purpose = "Per-VLAN snooping detail (router ports, groups)."
+parser = ""
+  [[command.args]]
+  name = "vlan_name"
+  type = "safe_name"
+  required = true
+
+[[command]]
+id = "show_lldp_neighbors"
+risk = "read"
+template = "show lldp neighbors detail"
+purpose = "LLDP peer detail."
+parser = ""
+
+[[command]]
+id = "show_ptp_clock"
+risk = "read"
+template = "show network-clock ptp"
+purpose = "PTP clock state."
+parser = ""
+
+[[command]]
+id = "show_version"
+risk = "read"
+template = "show version"
+purpose = "Software / hardware identification."
+parser = ""
+
+[[command]]
+id = "show_log"
+risk = "read"
+template = "show log | include IGMP|PTP|QoS"
+purpose = "Filtered log lines for AV-relevant events."
+parser = ""

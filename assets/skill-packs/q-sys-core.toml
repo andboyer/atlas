@@ -1,0 +1,51 @@
+# Q-SYS Core skill pack (HTTPS JSON-RPC / QRC over HTTPS).
+#
+# v1 keeps Q-SYS Core read-only via the Status endpoint. Approved 'send
+# named-control change' flows land in Phase 6 with explicit approval.
+id = "q-sys-core"
+name = "Q-SYS Core"
+transport = "https"
+description = "Read endpoints on a Q-SYS Core's QRC HTTPS bridge."
+
+[login]
+api_key_header = "X-Api-Key"
+
+[[command]]
+id = "status_get"
+risk = "read"
+template = "/api/v0/cores/self/status"
+method = "GET"
+purpose = "Core model, design name, redundancy, IsPrimary."
+parser = ""
+
+[[command]]
+id = "design_summary"
+risk = "read"
+template = "/api/v0/cores/self/designs/active"
+method = "GET"
+purpose = "Active design name + last-deployed timestamp."
+parser = ""
+
+[[command]]
+id = "named_controls_list"
+risk = "read"
+template = "/api/v0/cores/self/controls"
+method = "GET"
+purpose = "Enumerate all named controls (no values mutated)."
+parser = ""
+
+[[command]]
+id = "snmp_status"
+risk = "read"
+template = "/api/v0/cores/self/snmp"
+method = "GET"
+purpose = "SNMP agent state."
+parser = ""
+
+[[command]]
+id = "ptp_status"
+risk = "read"
+template = "/api/v0/cores/self/ptp"
+method = "GET"
+purpose = "PTP clock + grandmaster identity from the Core's view."
+parser = ""

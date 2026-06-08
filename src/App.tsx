@@ -13,6 +13,7 @@ import {
   Bell,
   Waves,
   Stethoscope,
+  Server,
 } from "lucide-react";
 import { StatusCard } from "./components/StatusCard";
 import { KpiRow } from "./components/KpiRow";
@@ -48,6 +49,11 @@ import { NarrativePanel } from "./components/NarrativePanel";
 import { StressTestPanel } from "./components/StressTestPanel";
 import { WifiEventsTimeline } from "./components/WifiEventsTimeline";
 import { RunbooksPanel } from "./components/RunbooksPanel";
+import HostInventoryPanel from "./components/HostInventoryPanel";
+import AuditLogPanel from "./components/AuditLogPanel";
+import SkillPackBrowser from "./components/SkillPackBrowser";
+import RunbookEditor from "./components/RunbookEditor";
+import ApprovalModal from "./components/ApprovalModal";
 import { useApp } from "./store";
 
 type TabId =
@@ -57,6 +63,7 @@ type TabId =
   | "airspace"
   | "av"
   | "runbooks"
+  | "fleet"
   | "devices"
   | "activity"
   | "tools"
@@ -210,6 +217,11 @@ function App() {
       id: "runbooks",
       label: "Runbooks",
       icon: <Stethoscope className="h-4 w-4" />,
+    },
+    {
+      id: "fleet",
+      label: "Fleet",
+      icon: <Server className="h-4 w-4" />,
     },
     {
       id: "devices",
@@ -390,6 +402,15 @@ function App() {
 
             {activeTab === "runbooks" && <RunbooksPanel />}
 
+            {activeTab === "fleet" && (
+              <div className="space-y-8">
+                <HostInventoryPanel />
+                <SkillPackBrowser />
+                <RunbookEditor />
+                <AuditLogPanel />
+              </div>
+            )}
+
             {activeTab === "devices" && (
               <section>
                 <SectionHeading icon={<Cpu className="h-3.5 w-3.5" />}>
@@ -445,6 +466,8 @@ function App() {
       {settingsLoaded && !settings?.onboarding_complete && (
         <OnboardingWizard onComplete={() => loadSettings()} />
       )}
+
+      <ApprovalModal />
     </div>
   );
 }

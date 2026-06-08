@@ -1,6 +1,7 @@
 pub mod collectors;
 mod commands;
 pub mod detect;
+pub mod device;
 pub mod discovery;
 pub mod llm;
 mod monitor;
@@ -60,6 +61,19 @@ pub fn run() {
             let db_path = app_dir.join("atlas.sqlite");
             let settings_path = Settings::path_for(&app_dir);
             let store = Store::open(db_path).expect("open store");
+            // Phase 2-6: device-execution subsystem.
+            let inventory_path = app_dir.join("hosts.toml");
+            let inventory =
+                device::inventory::Inventory::load(&inventory_path).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "failed to load inventory `{}`: {e}",
+                        inventory_path.display()
+                    );
+                    device::inventory::Inventory::default()
+                });
+            let user_runbooks_dir = app_dir.join("runbooks");
+            // Best-effort: don't crash setup if the dir can't be created.
+            let _ = std::fs::create_dir_all(&user_runbooks_dir);
             app.manage(AppState {
                 store,
                 settings_path,
@@ -70,6 +84,12 @@ pub fn run() {
                 last_av_diagnostics: Mutex::new(None),
                 last_deep_probe: Mutex::new(None),
                 recent_stress_results: Mutex::new(Vec::new()),
+                inventory: std::sync::Arc::new(Mutex::new(inventory)),
+                inventory_path,
+                packs: device::pack::load_bundled(),
+                audit: device::audit::Audit::new(&app_dir),
+                approval: device::approval::ApprovalCenter::new(),
+                user_runbooks_dir,
             });
             // Auto-start is driven from the frontend on first launch via
             // `bootstrapMonitor()` in the Zustand store: settings default to
@@ -127,6 +147,20 @@ pub fn run() {
             commands::list_runbooks,
             commands::pick_runbook,
             commands::run_runbook,
+            commands::list_hosts,
+            commands::upsert_host,
+            commands::delete_host,
+            commands::set_host_password,
+            commands::test_host,
+            commands::list_audit,
+            commands::clear_audit,
+            commands::list_skill_packs,
+            commands::list_pending_approvals,
+            commands::approve_runbook_step,
+            commands::deny_runbook_step,
+            commands::list_user_runbooks,
+            commands::save_user_runbook,
+            commands::delete_user_runbook,
             ollama_install::check_ollama_status,
             ollama_install::install_ollama,
             ollama_install::launch_ollama,

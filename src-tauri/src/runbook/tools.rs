@@ -38,10 +38,15 @@ pub enum ToolError {
 
 /// Engine-supplied execution context. Tools should respect the pinned NIC
 /// and the per-step timeout.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolContext {
     pub pinned_iface: Option<String>,
     pub timeout: Duration,
+    /// Optional event sink: tools that need to surface UI events
+    /// (e.g. `device.exec` raising an approval prompt) clone this and
+    /// emit `RunbookEvent` variants directly. `None` when a run was
+    /// invoked headlessly (e.g. by a unit test).
+    pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::runbook::RunbookEvent>>,
 }
 
 #[async_trait]

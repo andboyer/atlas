@@ -1,0 +1,53 @@
+# Luminex GigaCore skill pack (HTTPS REST).
+#
+# GigaCore web UI exposes a REST API under /api. Used for read-only
+# inspection of group memberships, port profiles, PTP, and snooping state.
+id = "luminex-gigacore"
+name = "Luminex GigaCore"
+transport = "https"
+description = "Read endpoints on a Luminex GigaCore switch's REST API."
+
+[login]
+path = "/api/login"
+username_field = "username"
+password_field = "password"
+
+[[command]]
+id = "system_info"
+risk = "read"
+template = "/api/system/info"
+method = "GET"
+purpose = "Model, firmware, serial."
+parser = ""
+
+[[command]]
+id = "port_status"
+risk = "read"
+template = "/api/ports"
+method = "GET"
+purpose = "Per-port link, speed, profile, group membership."
+parser = ""
+
+[[command]]
+id = "groups"
+risk = "read"
+template = "/api/groups"
+method = "GET"
+purpose = "GigaCore group definitions."
+parser = ""
+
+[[command]]
+id = "snooping"
+risk = "read"
+template = "/api/multicast/snooping"
+method = "GET"
+purpose = "IGMP snooping state per VLAN."
+parser = ""
+
+[[command]]
+id = "ptp_status"
+risk = "read"
+template = "/api/ptp/status"
+method = "GET"
+purpose = "PTP grandmaster + per-port role."
+parser = ""
