@@ -1,0 +1,70 @@
+# TP-Link Omada controller skill pack (HTTPS REST).
+#
+# Talks to the Omada Controller (SDN-style) REST API. The legacy per-AP
+# web UI is out of scope; operators in mixed deployments should point at
+# the controller instead. v1 ships login + a handful of GET endpoints.
+id = "tplink-omada"
+name = "TP-Link Omada Controller"
+transport = "https"
+description = "Read endpoints on a TP-Link Omada controller's REST API."
+
+[login]
+path = "/api/v2/login"
+username_field = "username"
+password_field = "password"
+
+[[command]]
+id = "list_sites"
+risk = "read"
+template = "/api/v2/sites?currentPage=1&currentPageSize=50"
+method = "GET"
+purpose = "Enumerate sites this controller manages."
+parser = ""
+
+[[command]]
+id = "list_devices"
+risk = "read"
+template = "/api/v2/sites/{site}/devices"
+method = "GET"
+purpose = "Switches + APs in a site."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true
+
+[[command]]
+id = "list_clients"
+risk = "read"
+template = "/api/v2/sites/{site}/clients"
+method = "GET"
+purpose = "Connected wired/wireless clients."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true
+
+[[command]]
+id = "list_switches"
+risk = "read"
+template = "/api/v2/sites/{site}/switches"
+method = "GET"
+purpose = "Switch-specific endpoint with port stats."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true
+
+[[command]]
+id = "list_aps"
+risk = "read"
+template = "/api/v2/sites/{site}/aps"
+method = "GET"
+purpose = "AP-specific endpoint with radio + client counts."
+parser = ""
+  [[command.args]]
+  name = "site"
+  type = "site_id"
+  required = true

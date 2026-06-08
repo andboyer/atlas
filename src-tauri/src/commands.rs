@@ -72,6 +72,22 @@ pub struct AppState {
     /// populated by `run_stress_test`. Included in the exported report so
     /// the operator can show "here's the active stress evidence I captured".
     pub recent_stress_results: Mutex<Vec<StressTestResult>>,
+    // ── Phase 2-6: device-execution subsystem ────────────────────────────
+    /// Inventory file path (`<app-data>/hosts.toml`). Mutated in place by
+    /// `upsert_host` / `delete_host` and re-read by the engine before
+    /// every runbook execution to pick up changes without a restart.
+    pub inventory: Arc<Mutex<crate::device::inventory::Inventory>>,
+    pub inventory_path: PathBuf,
+    /// In-memory skill pack registry. Read-only after process start
+    /// (packs are embedded in the binary via `include_str!`).
+    pub packs: crate::device::pack::PackRegistry,
+    /// Append-only audit log of every `device.exec` invocation.
+    pub audit: crate::device::audit::Audit,
+    /// Approval centre for `Mutate` / `Dangerous` commands. v1 packs are
+    /// 100% `Read` so nothing trips it; wired for Phase 6 write commands.
+    pub approval: crate::device::approval::ApprovalCenter,
+    /// User runbooks directory (`<app-data>/runbooks/`).
+    pub user_runbooks_dir: PathBuf,
 }
 
 #[tauri::command]
@@ -2576,8 +2592,9 @@ fn summarise(rb: &crate::runbook::Runbook) -> RunbookSummary {
 /// List every bundled runbook (no engine instance required — the library
 /// is parsed at startup inside `Engine::new`).
 #[tauri::command]
-pub async fn list_runbooks() -> Result<Vec<RunbookSummary>, String> {
-    let engine = crate::runbook::engine::Engine::new(None);
+pub async fn list_runbooks(state: State<'_, AppState>) -> Result<Vec<RunbookSummary>, String> {
+    let engine =
+        crate::runbook::engine::Engine::new(None).with_user_runbooks(&state.user_runbooks_dir);
     Ok(engine.list_runbooks().into_iter().map(summarise).collect())
 }
 
@@ -2589,7 +2606,8 @@ pub async fn pick_runbook(
     state: State<'_, AppState>,
     symptom: String,
 ) -> Result<Option<RunbookSummary>, String> {
-    let engine = crate::runbook::engine::Engine::new(None);
+    let engine =
+        crate::runbook::engine::Engine::new(None).with_user_runbooks(&state.user_runbooks_dir);
     let books = engine.list_runbooks();
     let needle = symptom.to_lowercase();
 
@@ -2693,7 +2711,15 @@ pub async fn run_runbook(
         variables: std::collections::BTreeMap::new(),
     };
 
-    let engine = crate::runbook::engine::Engine::new(llm_cfg);
+    let engine = crate::runbook::engine::Engine::new(llm_cfg)
+        .with_user_runbooks(&state.user_runbooks_dir)
+        .with_device(
+            state.inventory.clone(),
+            state.packs.clone(),
+            state.audit.clone(),
+            state.approval.clone(),
+            settings.llm_model.clone().unwrap_or_default(),
+        );
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::runbook::RunbookEvent>();
 
     // Fan-out the channel to Tauri events on a background task.
@@ -2708,4 +2734,212 @@ pub async fn run_runbook(
     // Closing tx by dropping it (engine.run consumed it) lets pump drain and exit.
     let _ = pump.await;
     result
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Phase 2-6: device-execution Tauri commands.
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub async fn list_hosts(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::device::inventory::HostEntry>, String> {
+    Ok(state.inventory.lock().hosts.clone())
+}
+
+#[tauri::command]
+pub async fn upsert_host(
+    state: State<'_, AppState>,
+    entry: crate::device::inventory::HostEntry,
+) -> Result<crate::device::inventory::HostEntry, String> {
+    let mut inv = state.inventory.lock();
+    inv.upsert(entry.clone());
+    inv.save(&state.inventory_path).map_err(|e| e.to_string())?;
+    Ok(entry)
+}
+
+#[tauri::command]
+pub async fn delete_host(state: State<'_, AppState>, host_id: String) -> Result<(), String> {
+    let mut inv = state.inventory.lock();
+    inv.remove(&host_id);
+    inv.save(&state.inventory_path).map_err(|e| e.to_string())?;
+    // Best-effort: also drop the keychain entry.
+    let _ = crate::device::keychain::delete(&host_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_host_password(
+    state: State<'_, AppState>,
+    host_id: String,
+    password: String,
+) -> Result<(), String> {
+    if state.inventory.lock().get(&host_id).is_none() {
+        return Err(format!("unknown host `{host_id}`"));
+    }
+    crate::device::keychain::set(&host_id, &password).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn test_host(state: State<'_, AppState>, host_id: String) -> Result<String, String> {
+    use crate::device::Transport as _;
+    let host = state
+        .inventory
+        .lock()
+        .get(&host_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown host `{host_id}`"))?;
+    let result = match host.transport {
+        crate::device::inventory::TransportKind::Ssh => {
+            let t = crate::device::ssh::SshTransport::new();
+            t.test(&host).await
+        }
+        crate::device::inventory::TransportKind::Https => {
+            let t = crate::device::https::HttpsTransport::new(state.packs.clone());
+            t.test(&host).await
+        }
+    };
+    result
+        .map(|_| format!("OK: {} ({:?})", host.hostname, host.transport))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_audit(
+    state: State<'_, AppState>,
+    last_n: Option<usize>,
+) -> Result<Vec<crate::device::audit::AuditEntry>, String> {
+    state
+        .audit
+        .tail(last_n.unwrap_or(200))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_audit(state: State<'_, AppState>) -> Result<(), String> {
+    state.audit.clear().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_skill_packs(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::device::pack::SkillPack>, String> {
+    Ok(state.packs.all().into_iter().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn list_pending_approvals(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.approval.pending())
+}
+
+#[tauri::command]
+pub async fn approve_runbook_step(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<bool, String> {
+    Ok(state
+        .approval
+        .resolve(&request_id, crate::device::approval::Verdict::Approve))
+}
+
+#[tauri::command]
+pub async fn deny_runbook_step(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<bool, String> {
+    Ok(state
+        .approval
+        .resolve(&request_id, crate::device::approval::Verdict::Deny))
+}
+
+#[derive(serde::Serialize)]
+pub struct UserRunbookEntry {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub bytes: u64,
+}
+
+#[tauri::command]
+pub async fn list_user_runbooks(
+    state: State<'_, AppState>,
+) -> Result<Vec<UserRunbookEntry>, String> {
+    let read = match std::fs::read_dir(&state.user_runbooks_dir) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut out = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        let is_yaml = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"))
+            .unwrap_or(false);
+        if !is_yaml {
+            continue;
+        }
+        let bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        let src = std::fs::read_to_string(&path).unwrap_or_default();
+        // Best-effort parse for id / name display; if it doesn't parse,
+        // surface the filename as both so the operator can still delete it.
+        let (id, name) = match serde_yaml_ng::from_str::<crate::runbook::Runbook>(&src) {
+            Ok(rb) => (rb.id, rb.name),
+            Err(_) => {
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("(unknown)")
+                    .to_string();
+                (stem.clone(), stem)
+            }
+        };
+        out.push(UserRunbookEntry {
+            id,
+            name,
+            path: path.display().to_string(),
+            bytes,
+        });
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn save_user_runbook(
+    state: State<'_, AppState>,
+    id: String,
+    yaml: String,
+) -> Result<(), String> {
+    // Validate before writing — caller should see the parse error in the
+    // editor rather than the engine logging it on the next list refresh.
+    let parsed: crate::runbook::Runbook =
+        serde_yaml_ng::from_str(&yaml).map_err(|e| format!("YAML parse: {e}"))?;
+    if parsed.id != id {
+        return Err(format!(
+            "id mismatch: file says `{}`, request says `{id}`",
+            parsed.id
+        ));
+    }
+    // Refuse path-traversal in the id; we use it as the file name.
+    if id.contains('/') || id.contains('\\') || id.starts_with('.') || id.is_empty() {
+        return Err(format!("illegal runbook id `{id}`"));
+    }
+    let _ = std::fs::create_dir_all(&state.user_runbooks_dir);
+    let path = state.user_runbooks_dir.join(format!("{id}.yaml"));
+    std::fs::write(&path, yaml).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_user_runbook(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    if id.contains('/') || id.contains('\\') || id.starts_with('.') || id.is_empty() {
+        return Err(format!("illegal runbook id `{id}`"));
+    }
+    let path = state.user_runbooks_dir.join(format!("{id}.yaml"));
+    match std::fs::remove_file(&path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }

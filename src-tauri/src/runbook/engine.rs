@@ -1,11 +1,17 @@
 //! Runbook executor — drives a `Runbook` through its steps and emits
 //! `RunbookEvent`s for the frontend.
 
+use crate::device::approval::ApprovalCenter;
+use crate::device::audit::Audit;
+use crate::device::exec_tool::{DeviceExecTool, ARG_RUNBOOK_ID, ARG_RUN_ID};
+use crate::device::inventory::Inventory;
+use crate::device::pack::PackRegistry;
 use crate::runbook::{
     expr, library, narrate, tools::Registry, tools::ToolContext, tools::ToolError, Branch,
     ExecutionOutcome, Runbook, RunbookEvent, RunbookExecution, StepRecord, StepStatus,
 };
 use chrono::Utc;
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -37,6 +43,9 @@ pub struct Engine {
     llm: Option<LlmConfig>,
     per_step_timeout: Duration,
     max_nesting_depth: usize,
+    /// Optional inventory snapshot — populated when the engine was built
+    /// via `with_device(...)`. Used to populate `host.<role>` bindings.
+    inventory: Option<Arc<Mutex<Inventory>>>,
 }
 
 impl Engine {
@@ -47,7 +56,34 @@ impl Engine {
             llm,
             per_step_timeout: Duration::from_secs(90),
             max_nesting_depth: 2,
+            inventory: None,
         }
+    }
+
+    /// Attach the device-execution subsystem (inventory, skill packs,
+    /// approval centre, audit log). Registers the `device.exec` tool and
+    /// makes the inventory available for `host.<role>` binding resolution
+    /// before each run.
+    pub fn with_device(
+        mut self,
+        inventory: Arc<Mutex<Inventory>>,
+        packs: PackRegistry,
+        audit: Audit,
+        approval: ApprovalCenter,
+        model: String,
+    ) -> Self {
+        let tool = DeviceExecTool::new(inventory.clone(), packs, audit, approval, model);
+        self.registry.register(Arc::new(tool));
+        self.inventory = Some(inventory);
+        self
+    }
+
+    /// Merge user-authored runbooks from `<app-data>/runbooks/*.yaml` on
+    /// top of the bundled library. User entries override bundled entries
+    /// with the same id (Phase 5).
+    pub fn with_user_runbooks(mut self, dir: &std::path::Path) -> Self {
+        self.library.merge_dir(dir);
+        self
     }
 
     pub fn list_runbooks(&self) -> Vec<&Runbook> {
@@ -92,12 +128,34 @@ impl Engine {
                 .entry("nic".into())
                 .or_insert(Value::String(nic.clone()));
         }
+        // Populate `{host.<role>}` from inventory so YAML runbooks can
+        // reference the operator's switch / controller / Q-SYS Core by
+        // role rather than literal id. Also exposes `{host.<role>_uplink_port}`
+        // for switch entries that declared one — needed by AV-line
+        // runbooks that probe a specific switchport.
+        if let Some(inv) = &self.inventory {
+            let inv = inv.lock();
+            let mut host_map = serde_json::Map::new();
+            for entry in &inv.hosts {
+                for role in &entry.roles {
+                    host_map.insert(role.clone(), Value::String(entry.id.clone()));
+                    if !entry.av_switch_uplink_port.is_empty() {
+                        host_map.insert(
+                            format!("{role}_uplink_port"),
+                            Value::String(entry.av_switch_uplink_port.clone()),
+                        );
+                    }
+                }
+            }
+            bindings.insert("host".into(), Value::Object(host_map));
+        }
         let mut steps_out: Vec<StepRecord> = Vec::new();
         let mut outcome = ExecutionOutcome::Clean;
 
         let ctx = Arc::new(ToolContext {
             pinned_iface: inputs.pinned_iface.clone(),
             timeout: self.per_step_timeout,
+            event_tx: tx.clone(),
         });
 
         let result = self
@@ -228,7 +286,18 @@ impl Engine {
 
             let start = Instant::now();
             let started_at = Utc::now();
-            let exec_result = self.invoke_tool(&step.tool, args_value.clone(), &ctx).await;
+            // device.exec gets the runbook_id + run_id injected so the
+            // audit log can correlate one JSONL row to the step that
+            // produced it. The keys live in `device::exec_tool` so the
+            // executor stays the single source of truth for the contract.
+            let mut tool_args = args_value.clone();
+            if step.tool == "device.exec" {
+                if let Some(obj) = tool_args.as_object_mut() {
+                    obj.insert(ARG_RUNBOOK_ID.into(), Value::String(rb.id.clone()));
+                    obj.insert(ARG_RUN_ID.into(), Value::String(run_id.into()));
+                }
+            }
+            let exec_result = self.invoke_tool(&step.tool, tool_args, &ctx).await;
             let duration_ms = start.elapsed().as_millis() as u64;
 
             let mut rec = StepRecord {

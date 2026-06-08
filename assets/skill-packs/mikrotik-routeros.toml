@@ -1,0 +1,79 @@
+# MikroTik RouterOS skill pack (SSH).
+id = "mikrotik-routeros"
+name = "MikroTik RouterOS"
+transport = "ssh"
+description = "AV-focused read commands for MikroTik RouterOS devices."
+
+[[command]]
+id = "interface_print"
+risk = "read"
+template = "/interface print"
+purpose = "Interface list with state + counters."
+parser = ""
+
+[[command]]
+id = "interface_ethernet_monitor"
+risk = "read"
+template = "/interface ethernet monitor {iface} once"
+purpose = "Per-port speed/duplex/autoneg/cable diag."
+parser = ""
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
+  required = true
+
+[[command]]
+id = "switch_port_print"
+risk = "read"
+template = "/interface ethernet switch port print"
+purpose = "Switch chip per-port snapshot."
+parser = ""
+
+[[command]]
+id = "ip_address_print"
+risk = "read"
+template = "/ip address print"
+purpose = "L3 addresses on interfaces."
+parser = ""
+
+[[command]]
+id = "ip_route_print"
+risk = "read"
+template = "/ip route print"
+purpose = "Routing table."
+parser = ""
+
+[[command]]
+id = "ip_arp_print"
+risk = "read"
+template = "/ip arp print"
+purpose = "ARP cache snapshot."
+parser = ""
+
+[[command]]
+id = "igmp_proxy_status"
+risk = "read"
+template = "/routing igmp-proxy mfc print"
+purpose = "Multicast forwarding cache (igmp-proxy)."
+parser = ""
+
+[[command]]
+id = "log_print"
+risk = "read"
+template = "/log print where topics~\"igmp|ptp|qos\""
+purpose = "Filtered log entries for AV-relevant topics."
+parser = ""
+
+[[command]]
+id = "system_resource_print"
+risk = "read"
+template = "/system resource print"
+purpose = "CPU / memory / version."
+parser = ""
+
+[[command]]
+id = "system_identity_print"
+risk = "read"
+template = "/system identity print"
+purpose = "Device identity (name)."
+parser = ""

@@ -228,4 +228,17 @@ pub enum RunbookEvent {
         run_id: String,
         message: String,
     },
+    /// Emitted by `device.exec` when a `Mutate` / `Dangerous` command is
+    /// about to fire. The UI presents an approval modal; the operator's
+    /// response is fed back into `ApprovalCenter::resolve(request_id, ...)`
+    /// via the `approve_runbook_step` / `deny_runbook_step` Tauri commands.
+    ApprovalRequired {
+        run_id: String,
+        request_id: String,
+        host_id: String,
+        host_alias: String,
+        command_id: String,
+        risk: String,
+        rendered: String,
+    },
 }
