@@ -5,6 +5,7 @@ pub mod dante;
 pub mod deep;
 pub mod dns_leak;
 pub mod dscp;
+pub mod elevate;
 pub mod iface;
 pub mod interference;
 pub mod linkaudit;
