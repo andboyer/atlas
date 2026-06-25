@@ -3,8 +3,8 @@ use crate::detect::{self, AnomalySignal, Context};
 use crate::settings::Settings;
 use crate::store::{DeviceEvent, IncidentCorrelation, MetricSample, ScanSummary, Store};
 use crate::types::{
-    AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, ScanResult,
-    StressTestResult,
+    AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, PtpProbeResult,
+    ScanResult, StressTestResult,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -2840,11 +2840,27 @@ pub async fn run_deep_probes(
             out.igmp = Some(igmp);
         }
         "ptp-listen" => {
-            let i = iface.clone();
-            let ptp = tokio::task::spawn_blocking(move || crate::probes::ptp::run_blocking(&i, 12))
-                .await
-                .map_err(|e| format!("ptp join: {e}"))?;
-            out.ptp = Some(ptp);
+            // PTP-over-UDP (L3) binds unprivileged, but PTP-over-Ethernet
+            // (L2, ethertype 0x88F7 — SMPTE 2110 / AVB gPTP) needs a BPF
+            // capture that requires root. On macOS we therefore run the
+            // probe elevated so it observes BOTH transports; elsewhere L2
+            // capture isn't implemented, so we stay unprivileged.
+            #[cfg(target_os = "macos")]
+            {
+                let json = elevate_and_run_probe(&exe, "ptp-listen", &iface, 12).await?;
+                let ptp: PtpProbeResult = serde_json::from_str(json.trim())
+                    .map_err(|e| format!("parse PtpProbeResult: {e}; raw={json:?}"))?;
+                out.ptp = Some(ptp);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let i = iface.clone();
+                let ptp =
+                    tokio::task::spawn_blocking(move || crate::probes::ptp::run_blocking(&i, 12))
+                        .await
+                        .map_err(|e| format!("ptp join: {e}"))?;
+                out.ptp = Some(ptp);
+            }
         }
         "dscp-audit" => {
             #[cfg(unix)]

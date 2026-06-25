@@ -51,6 +51,7 @@ pub fn try_dispatch(args: &[String]) -> Option<i32> {
     let kind = args.get(probe_idx + 1)?;
     match kind.as_str() {
         "igmp-listen" => Some(run_igmp_listen(args)),
+        "ptp-listen" => Some(run_ptp_listen(args)),
         #[cfg(target_os = "windows")]
         "dscp-audit" => Some(run_dscp_audit(args)),
         other => {
@@ -120,6 +121,39 @@ fn run_igmp_listen(args: &[String]) -> i32 {
         Ok(s) => s,
         Err(e) => {
             eprintln!("serialise IgmpProbeResult: {e}");
+            return 1;
+        }
+    };
+    if let Some(path) = arg_value(args, "--probe-out") {
+        if let Err(e) = std::fs::write(&path, &json) {
+            eprintln!("write probe output to {path}: {e}");
+            return 1;
+        }
+    } else {
+        println!("{json}");
+    }
+    0
+}
+
+/// Run the PTP listener as the (elevated) probe binary. Binding UDP 319/320
+/// for the L3 listen works unprivileged, but the L2 (ethertype 0x88F7)
+/// capture inside `ptp::run_blocking` needs root to open `/dev/bpf` — so the
+/// app routes this kind through the elevation helper on macOS to observe
+/// PTP-over-Ethernet (SMPTE 2110 / AVB gPTP) in addition to PTP-over-UDP.
+fn run_ptp_listen(args: &[String]) -> i32 {
+    let iface = arg_value(args, "--iface").unwrap_or_else(|| "en0".to_string());
+    // PTP Announce/Sync arrive every 1-2s, so a short window suffices.
+    let listen_secs: u32 = arg_value(args, "--secs")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(12)
+        .clamp(1, 60);
+
+    let result = crate::probes::ptp::run_blocking(&iface, listen_secs);
+
+    let json = match serde_json::to_string(&result) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("serialise PtpProbeResult: {e}");
             return 1;
         }
     };

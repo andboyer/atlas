@@ -804,7 +804,7 @@ function PtpProbePanel({
     <ProbePanelShell
       icon={<Activity className="h-4 w-4" />}
       title="PTP grandmaster"
-      hint="Listens on UDP 319/320 for IEEE-1588 messages — identifies grandmasters, profile (media vs default), and sync jitter."
+      hint="Listens for IEEE-1588 PTP over UDP 319/320 and L2 Ethernet (ethertype 0x88F7, SMPTE 2110 / AVB) — identifies grandmasters, profile (media vs default), and sync jitter."
       running={running}
       onRun={onRun}
       buttonLabel="Listen"

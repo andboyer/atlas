@@ -19,6 +19,11 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+use std::ffi::CString;
+#[cfg(target_os = "macos")]
+use std::io::ErrorKind;
+
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::probes::iface as iface_probe;
@@ -71,6 +76,18 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
         let _ = general.join_multicast_v4(grp, &iface_v4);
     }
 
+    // Concurrently capture L2 PTP (IEEE-1588 over Ethernet, ethertype
+    // 0x88F7 — used by SMPTE 2110 / AVB gPTP) via BPF on macOS. The UDP
+    // sockets above only see PTP-over-UDP, so without this an L2-only
+    // grandmaster would be invisible. Best-effort: opening /dev/bpf needs
+    // root, so an unprivileged probe simply yields no L2 records and falls
+    // back to the L3 path alone.
+    #[cfg(target_os = "macos")]
+    let l2_handle = {
+        let iface = iface.to_string();
+        std::thread::spawn(move || capture_l2_ptp(&iface, listen_secs))
+    };
+
     // Per-channel-per-(domain,version) accumulator.
     let mut by_key: BTreeMap<(u8, u8), DomainAcc> = BTreeMap::new();
 
@@ -85,54 +102,11 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
                     let data: &[u8] =
                         unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
                     if let Some(msg) = parse_ptp(data) {
-                        let key = (msg.domain, msg.version);
-                        let entry = by_key.entry(key).or_insert_with(|| DomainAcc {
-                            domain: msg.domain,
-                            version: msg.version,
-                            log_announce: 1,
-                            log_sync: 0,
-                            sync_arrivals: Vec::new(),
-                            grandmasters: BTreeMap::new(),
-                            saw_p2p: false,
-                            saw_e2e: false,
-                        });
                         let src_ip = match from.as_socket_ipv4() {
                             Some(addr) => addr.ip().to_string(),
                             None => "?".to_string(),
                         };
-                        match msg.kind {
-                            PtpKind::Sync if is_event => {
-                                entry.sync_arrivals.push(Instant::now());
-                                entry.log_sync = msg.log_message_interval;
-                                if msg.dst_is_p2p {
-                                    entry.saw_p2p = true;
-                                } else {
-                                    entry.saw_e2e = true;
-                                }
-                            }
-                            PtpKind::Announce { gm } => {
-                                entry.log_announce = msg.log_message_interval;
-                                let id = entry
-                                    .grandmasters
-                                    .entry(gm.clock_identity)
-                                    .or_insert_with(|| GmAcc {
-                                        clock_identity: gm.clock_identity,
-                                        priority1: gm.priority1,
-                                        priority2: gm.priority2,
-                                        clock_class: gm.clock_class,
-                                        clock_accuracy: gm.clock_accuracy,
-                                        announces_seen: 0,
-                                        source_ip: src_ip.clone(),
-                                    });
-                                id.announces_seen = id.announces_seen.saturating_add(1);
-                                // Keep priority/class fresh in case of churn.
-                                id.priority1 = gm.priority1;
-                                id.priority2 = gm.priority2;
-                                id.clock_class = gm.clock_class;
-                                id.clock_accuracy = gm.clock_accuracy;
-                            }
-                            _ => {}
-                        }
+                        record_ptp(&mut by_key, &msg, is_event, src_ip, Instant::now());
                     }
                 }
                 Err(e)
@@ -143,6 +117,14 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
                 }
                 Err(_) => continue,
             }
+        }
+    }
+
+    // Fold in any L2 PTP messages the BPF thread captured (macOS).
+    #[cfg(target_os = "macos")]
+    if let Ok(records) = l2_handle.join() {
+        for rec in records {
+            record_ptp(&mut by_key, &rec.msg, rec.is_event, rec.src, rec.at);
         }
     }
 
@@ -244,6 +226,62 @@ fn open_udp_socket(port: u16, iface_v4: Ipv4Addr) -> std::io::Result<Socket> {
         sock.set_multicast_if_v4(&iface_v4)?;
     }
     Ok(sock)
+}
+
+/// Fold a parsed PTP message into the per-(domain,version) accumulator.
+/// Shared by the L3 UDP listener and the macOS L2 (ethertype 0x88F7) BPF
+/// capture so both transports populate the same domains / grandmasters.
+fn record_ptp(
+    by_key: &mut BTreeMap<(u8, u8), DomainAcc>,
+    msg: &ParsedPtp,
+    is_event: bool,
+    src_ip: String,
+    now: Instant,
+) {
+    let key = (msg.domain, msg.version);
+    let entry = by_key.entry(key).or_insert_with(|| DomainAcc {
+        domain: msg.domain,
+        version: msg.version,
+        log_announce: 1,
+        log_sync: 0,
+        sync_arrivals: Vec::new(),
+        grandmasters: BTreeMap::new(),
+        saw_p2p: false,
+        saw_e2e: false,
+    });
+    match msg.kind {
+        PtpKind::Sync if is_event => {
+            entry.sync_arrivals.push(now);
+            entry.log_sync = msg.log_message_interval;
+            if msg.dst_is_p2p {
+                entry.saw_p2p = true;
+            } else {
+                entry.saw_e2e = true;
+            }
+        }
+        PtpKind::Announce { gm } => {
+            entry.log_announce = msg.log_message_interval;
+            let id = entry
+                .grandmasters
+                .entry(gm.clock_identity)
+                .or_insert_with(|| GmAcc {
+                    clock_identity: gm.clock_identity,
+                    priority1: gm.priority1,
+                    priority2: gm.priority2,
+                    clock_class: gm.clock_class,
+                    clock_accuracy: gm.clock_accuracy,
+                    announces_seen: 0,
+                    source_ip: src_ip.clone(),
+                });
+            id.announces_seen = id.announces_seen.saturating_add(1);
+            // Keep priority/class fresh in case of churn.
+            id.priority1 = gm.priority1;
+            id.priority2 = gm.priority2;
+            id.clock_class = gm.clock_class;
+            id.clock_accuracy = gm.clock_accuracy;
+        }
+        _ => {}
+    }
 }
 
 /// Stddev of consecutive Sync inter-arrival gaps, in microseconds.
@@ -389,6 +427,248 @@ fn parse_ptp(data: &[u8]) -> Option<ParsedPtp> {
     })
 }
 
+// ─── macOS L2 PTP (ethertype 0x88F7) capture via BPF ─────────────────────
+//
+// PTP can run directly over Ethernet (IEEE 1588 Annex F / IEEE 802.1AS
+// gPTP) instead of UDP/IPv4 — common on SMPTE 2110 / AVB media networks.
+// The UDP sockets in `listen_for_ptp` can't see those frames, so on macOS
+// we also capture at the datalink layer with a kernel-side "ethertype ==
+// 0x88F7" BPF filter (exactly what tcpdump compiles for `ether proto
+// 0x88f7`). Requires root to open /dev/bpf; unprivileged callers get no
+// L2 records and rely on the L3 path alone.
+
+#[cfg(target_os = "macos")]
+struct L2Record {
+    msg: ParsedPtp,
+    at: Instant,
+    src: String,
+    is_event: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn capture_l2_ptp(iface: &str, listen_secs: u32) -> Vec<L2Record> {
+    // Best-effort: /dev/bpf is root-only on stock macOS, so an unprivileged
+    // probe yields no L2 records (the L3 UDP path still runs).
+    capture_l2_ptp_inner(iface, listen_secs).unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn capture_l2_ptp_inner(iface: &str, listen_secs: u32) -> anyhow::Result<Vec<L2Record>> {
+    use anyhow::Context;
+
+    // BPF ioctls (<net/bpf.h>), group 'B' (0x42), BSD _IOR/_IOW encoding:
+    // inout | ((sizeof & 0x1fff) << 16) | (g << 8) | num.
+    const BIOCGBLEN: libc::c_ulong = 0x4004_4266; // _IOR('B',102,u_int)
+    const BIOCSETIF: libc::c_ulong = 0x8020_426c; // _IOW('B',108,struct ifreq)
+    const BIOCIMMEDIATE: libc::c_ulong = 0x8004_4270; // _IOW('B',112,u_int)
+    const BIOCSETF: libc::c_ulong = 0x8010_4267; // _IOW('B',103,struct bpf_program)
+
+    let fd = open_bpf().context("open /dev/bpf")?;
+    let _guard = BpfFd(fd);
+
+    // struct ifreq is 32 bytes on macOS (16-byte name + 16-byte ifr_ifru
+    // union); BIOCSETIF only reads the name.
+    #[repr(C)]
+    struct IfReq {
+        ifr_name: [libc::c_char; 16],
+        _ifr_ifru: [u8; 16],
+    }
+    let mut ifr = IfReq {
+        ifr_name: [0; 16],
+        _ifr_ifru: [0; 16],
+    };
+    let nbytes = iface.as_bytes();
+    if nbytes.len() >= ifr.ifr_name.len() {
+        anyhow::bail!("interface name too long: {iface}");
+    }
+    for (i, b) in nbytes.iter().enumerate() {
+        ifr.ifr_name[i] = *b as libc::c_char;
+    }
+    if unsafe { libc::ioctl(fd, BIOCSETIF, &ifr) } < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("BIOCSETIF {iface}"));
+    }
+
+    // Immediate mode: hand us each frame as it arrives instead of buffering.
+    let one: libc::c_uint = 1;
+    if unsafe { libc::ioctl(fd, BIOCIMMEDIATE, &one) } < 0 {
+        return Err(std::io::Error::last_os_error()).context("BIOCIMMEDIATE");
+    }
+
+    install_ptp_l2_filter(fd, BIOCSETF)?;
+
+    let mut blen: libc::c_uint = 0;
+    if unsafe { libc::ioctl(fd, BIOCGBLEN, &mut blen) } < 0 {
+        return Err(std::io::Error::last_os_error()).context("BIOCGBLEN");
+    }
+    let blen = if blen == 0 { 4096 } else { blen as usize };
+    let mut buf = vec![0u8; blen];
+
+    let deadline = Instant::now() + Duration::from_secs(listen_secs as u64);
+    let mut records: Vec<L2Record> = Vec::new();
+
+    while Instant::now() < deadline {
+        // Wait up to 500ms for readability so we periodically re-check the deadline.
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let pr = unsafe { libc::poll(&mut pfd, 1, 500) };
+        if pr < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e).context("poll(bpf)");
+        }
+        if pr == 0 {
+            continue;
+        }
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) {
+                continue;
+            }
+            return Err(e).context("read(bpf)");
+        }
+        let n = n as usize;
+
+        // Walk the BPF records packed into the buffer.
+        let mut p = 0usize;
+        while p + 18 <= n {
+            // struct bpf_hdr: bh_tstamp(8) | bh_caplen@8 | bh_datalen@12 | bh_hdrlen@16(u16).
+            let caplen = u32::from_ne_bytes(buf[p + 8..p + 12].try_into().unwrap()) as usize;
+            let hdrlen = u16::from_ne_bytes(buf[p + 16..p + 18].try_into().unwrap()) as usize;
+            if hdrlen == 0 {
+                break;
+            }
+            let start = p + hdrlen;
+            let end = start + caplen;
+            if end > n {
+                break;
+            }
+            if let Some((msg, src)) = parse_l2_ptp(&buf[start..end]) {
+                let is_event = matches!(msg.kind, PtpKind::Sync);
+                records.push(L2Record {
+                    msg,
+                    at: Instant::now(),
+                    src,
+                    is_event,
+                });
+            }
+            // Records are padded to BPF_ALIGNMENT (sizeof(int32_t) = 4) on macOS.
+            p += (hdrlen + caplen + 3) & !3;
+        }
+    }
+    Ok(records)
+}
+
+/// Open the first available BPF device. Requires root on stock macOS, so
+/// `EACCES` short-circuits (trying further minors is pointless).
+#[cfg(target_os = "macos")]
+fn open_bpf() -> std::io::Result<libc::c_int> {
+    let mut candidates: Vec<String> = vec!["/dev/bpf".to_string()];
+    for i in 0..256 {
+        candidates.push(format!("/dev/bpf{i}"));
+    }
+    let mut last = std::io::Error::new(ErrorKind::NotFound, "no /dev/bpf device available");
+    for path in candidates {
+        let Ok(c) = CString::new(path) else { continue };
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR) };
+        if fd >= 0 {
+            return Ok(fd);
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() == ErrorKind::PermissionDenied {
+            return Err(err);
+        }
+        // EBUSY → minor in use, try the next.
+        last = err;
+    }
+    Err(last)
+}
+
+/// Install a classic-BPF program accepting only Ethernet-framed PTP
+/// (ethertype 0x88F7), including a single 802.1Q VLAN tag.
+#[cfg(target_os = "macos")]
+fn install_ptp_l2_filter(fd: libc::c_int, biocsetf: libc::c_ulong) -> std::io::Result<()> {
+    #[repr(C)]
+    struct BpfInsn {
+        code: u16,
+        jt: u8,
+        jf: u8,
+        k: u32,
+    }
+    #[repr(C)]
+    struct BpfProgram {
+        bf_len: libc::c_uint,
+        bf_insns: *const BpfInsn,
+    }
+    //   ldh [12]                 ; ethertype
+    //   jeq #0x88f7, ACCEPT, +0  ; PTP-over-Ethernet (untagged)?
+    //   jeq #0x8100, +0, REJECT  ; 802.1Q VLAN tag?
+    //   ldh [16]                 ; inner ethertype
+    //   jeq #0x88f7, ACCEPT, +0  ; PTP (tagged)?
+    //   ret #0                   ; REJECT
+    //   ret #262144              ; ACCEPT
+    let prog = [
+        BpfInsn { code: 0x28, jt: 0, jf: 0, k: 12 },
+        BpfInsn { code: 0x15, jt: 4, jf: 0, k: 0x88f7 },
+        BpfInsn { code: 0x15, jt: 0, jf: 2, k: 0x8100 },
+        BpfInsn { code: 0x28, jt: 0, jf: 0, k: 16 },
+        BpfInsn { code: 0x15, jt: 1, jf: 0, k: 0x88f7 },
+        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0 },
+        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0x0004_0000 },
+    ];
+    let bp = BpfProgram {
+        bf_len: prog.len() as libc::c_uint,
+        bf_insns: prog.as_ptr(),
+    };
+    if unsafe { libc::ioctl(fd, biocsetf, &bp) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Strip the Ethernet (and optional single 802.1Q tag) header and parse
+/// the PTP header that follows. Returns the parsed message plus the
+/// sender's MAC formatted as the source identity.
+#[cfg(target_os = "macos")]
+fn parse_l2_ptp(frame: &[u8]) -> Option<(ParsedPtp, String)> {
+    if frame.len() < 14 {
+        return None;
+    }
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    let ptp_off = match ethertype {
+        0x88f7 => 14,
+        0x8100 => {
+            if frame.len() < 18 || u16::from_be_bytes([frame[16], frame[17]]) != 0x88f7 {
+                return None;
+            }
+            18
+        }
+        _ => return None,
+    };
+    let msg = parse_ptp(frame.get(ptp_off..)?)?;
+    let src = format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        frame[6], frame[7], frame[8], frame[9], frame[10], frame[11]
+    );
+    Some((msg, src))
+}
+
+/// RAII guard closing the BPF file descriptor.
+#[cfg(target_os = "macos")]
+struct BpfFd(libc::c_int);
+#[cfg(target_os = "macos")]
+impl Drop for BpfFd {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.0) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,5 +744,48 @@ mod tests {
         assert_eq!(classify_profile(2, 0, -3), "media");
         assert_eq!(classify_profile(2, 1, 0), "default");
         assert_eq!(classify_profile(1, 1, 0), "default");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parses_l2_announce_untagged() {
+        // Ethernet header (14 bytes) + ethertype 0x88F7 + Announce payload.
+        let mut frame = vec![0u8; 14];
+        frame[6..12].copy_from_slice(&[0x00, 0x1d, 0xc1, 0x11, 0x22, 0x33]);
+        frame[12] = 0x88;
+        frame[13] = 0xf7;
+        frame.extend_from_slice(&make_announce(4));
+        let (msg, src) = parse_l2_ptp(&frame).expect("parse l2 announce");
+        assert_eq!(msg.domain, 4);
+        assert!(matches!(msg.kind, PtpKind::Announce { .. }));
+        assert_eq!(src, "00:1d:c1:11:22:33");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parses_l2_sync_vlan_tagged() {
+        // Ethernet header + 802.1Q tag (0x8100 + TCI) + inner 0x88F7 + Sync.
+        let mut frame = vec![0u8; 12];
+        frame[6..12].copy_from_slice(&[0x00, 0x1d, 0xc1, 0x44, 0x55, 0x66]);
+        frame.extend_from_slice(&[0x81, 0x00, 0x00, 0x05]); // 802.1Q, VLAN 5
+        frame.extend_from_slice(&[0x88, 0xf7]); // inner ethertype = PTP
+        frame.extend_from_slice(&make_sync(2));
+        let (msg, src) = parse_l2_ptp(&frame).expect("parse l2 vlan sync");
+        assert_eq!(msg.domain, 2);
+        assert!(matches!(msg.kind, PtpKind::Sync));
+        assert_eq!(src, "00:1d:c1:44:55:66");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rejects_non_ptp_l2() {
+        // IPv4 ethertype 0x0800 is not PTP and must be ignored.
+        let mut frame = vec![0u8; 14];
+        frame[12] = 0x08;
+        frame[13] = 0x00;
+        frame.extend_from_slice(&[0u8; 64]);
+        assert!(parse_l2_ptp(&frame).is_none());
+        // Too short to even hold an Ethernet header.
+        assert!(parse_l2_ptp(&[0u8; 10]).is_none());
     }
 }
