@@ -53,16 +53,17 @@ pub struct HostEntry {
     pub alias: String,
     /// IPv4/IPv6/DNS name.
     pub hostname: String,
-    /// 22 for ssh, 443 for https unless overridden.
+    /// 22 for ssh, 443 for https, 80 for plain http unless overridden.
     pub port: u16,
-    /// `ssh` or `https`.
+    /// `ssh`, `https`, or `http`.
     pub transport: TransportKind,
     /// Skill pack id, e.g. `cisco-ios`, `tplink-omada`, `unifi`.
     pub skill: String,
-    /// SSH username — ignored for HTTPS controllers that login via API.
+    /// SSH username — also used as the HTTP Basic username for `http`/`https`
+    /// hosts whose `auth = "basic"` (e.g. Luminex GigaCore web UI).
     #[serde(default)]
     pub username: String,
-    /// `key` or `password` (SSH). `api_key` or `password` (HTTPS).
+    /// `key` or `password` (SSH). `api_key`, `basic`, or `password` (HTTP/HTTPS).
     #[serde(default)]
     pub auth: AuthKind,
     /// Optional path to a private key for SSH. `~` expanded at use time.
@@ -100,6 +101,9 @@ fn true_default() -> bool {
 pub enum TransportKind {
     Ssh,
     Https,
+    /// Plain (cleartext) HTTP. Some embedded switch web UIs (Luminex
+    /// GigaCore) expose their REST surface on port 80 only.
+    Http,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -109,6 +113,9 @@ pub enum AuthKind {
     Password,
     Key,
     ApiKey,
+    /// HTTP Basic auth — the keychain password rides on every request via
+    /// the `Authorization` header; there is no session login.
+    Basic,
 }
 
 impl Inventory {

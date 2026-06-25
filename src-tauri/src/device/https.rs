@@ -39,6 +39,15 @@ struct SessionEntry {
     logged_in: bool,
 }
 
+/// URL scheme for a host: cleartext `http` for `TransportKind::Http`,
+/// otherwise `https`.
+fn scheme_for(host: &HostEntry) -> &'static str {
+    match host.transport {
+        TransportKind::Http => "http",
+        _ => "https",
+    }
+}
+
 impl HttpsTransport {
     pub fn new(packs: pack::PackRegistry) -> Self {
         Self {
@@ -83,6 +92,13 @@ impl HttpsTransport {
         if session.logged_in {
             return Ok(());
         }
+        // HTTP Basic auth (e.g. Luminex GigaCore web UI): credentials ride on
+        // every request via the Authorization header — there is no session
+        // login to perform up front.
+        if host.auth == AuthKind::Basic {
+            self.mark_logged_in(&host.id);
+            return Ok(());
+        }
         let pack = self
             .packs
             .get(&host.skill)
@@ -105,7 +121,7 @@ impl HttpsTransport {
         }
         let password = keychain::get(&host.id)
             .map_err(|e| TransportError::Auth(host.id.clone(), e.to_string()))?;
-        let url = format!("https://{}:{}{}", host.hostname, host.port, login.path);
+        let url = format!("{}://{}:{}{}", scheme_for(host), host.hostname, host.port, login.path);
         let mut body = serde_json::Map::new();
         if !login.username_field.is_empty() {
             body.insert(
@@ -151,13 +167,13 @@ impl Transport for HttpsTransport {
         host: &HostEntry,
         req: CommandRequest,
     ) -> Result<CommandResponse, TransportError> {
-        if host.transport != TransportKind::Https {
-            return Err(TransportError::Unsupported("expected https host".into()));
+        if !matches!(host.transport, TransportKind::Https | TransportKind::Http) {
+            return Err(TransportError::Unsupported("expected http(s) host".into()));
         }
         self.ensure_login(host).await?;
         let session = self.session_for(host)?;
         let started = Instant::now();
-        let url = format!("https://{}:{}{}", host.hostname, host.port, req.rendered);
+        let url = format!("{}://{}:{}{}", scheme_for(host), host.hostname, host.port, req.rendered);
         let method = Method::from_bytes(req.method.as_bytes())
             .map_err(|e| TransportError::Other(format!("bad method `{}`: {e}", req.method)))?;
         let mut builder = session.client.request(method, &url);
@@ -175,6 +191,10 @@ impl Transport for HttpsTransport {
                     }
                 }
             }
+        }
+        // HTTP Basic auth (e.g. Luminex GigaCore web UI).
+        if host.auth == AuthKind::Basic {
+            builder = builder.basic_auth(&host.username, keychain::get(&host.id).ok());
         }
         if let Some(body) = req.body {
             builder = builder.json(&body);
@@ -206,10 +226,12 @@ impl Transport for HttpsTransport {
         // already happened in build_client).
         self.ensure_login(host).await?;
         let session = self.session_for(host)?;
-        let url = format!("https://{}:{}/", host.hostname, host.port);
-        let resp = session
-            .client
-            .get(&url)
+        let url = format!("{}://{}:{}/", scheme_for(host), host.hostname, host.port);
+        let mut get = session.client.get(&url);
+        if host.auth == AuthKind::Basic {
+            get = get.basic_auth(&host.username, keychain::get(&host.id).ok());
+        }
+        let resp = get
             .send()
             .await
             .map_err(|e| TransportError::Connect(host.hostname.clone(), e.to_string()))?;

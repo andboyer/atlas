@@ -93,13 +93,14 @@ fn run_dscp_audit(args: &[String]) -> i32 {
 
 fn run_igmp_listen(args: &[String]) -> i32 {
     let iface = arg_value(args, "--iface").unwrap_or_else(|| "en0".to_string());
-    // Upper-bound 180s so a thorough listen still catches an RFC-3376
-    // default querier (125s General Query interval) plus generous slack;
-    // lower bound 1s for unit-test friendliness.
+    // Upper-bound 300s so a thorough listen reliably catches an RFC-3376
+    // default querier (125s General Query interval) even when the listen
+    // starts just after a query — a single 125s interval leaves no margin,
+    // so the default is ~2x (260s). Lower bound 1s for unit-test friendliness.
     let listen_secs: u32 = arg_value(args, "--secs")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(130)
-        .clamp(1, 180);
+        .unwrap_or(260)
+        .clamp(1, 300);
 
     let result = match listen_for_igmp(&iface, listen_secs) {
         Ok(r) => r,
@@ -287,11 +288,12 @@ fn build_igmp_detail(
         }
         "no_querier_observed" | "silent" if !scoped.is_empty() => Some(format!(
             "No IGMP querier seen on {iface} during {listen_secs}s, yet this host has joined {} \
-             routed/scoped multicast group(s){} ({sample}). Without a querier on THIS segment, \
-             IGMP snooping ages these out (~260s) and stops delivering them to the port — AVoIP \
-             audio/PTP will drop even though the control plane (mDNS / Dante ConMon) looks \
-             healthy. A querier on a different VLAN does not serve this segment; enable an IGMP \
-             querier on this VLAN's L3 device.",
+             routed/scoped multicast group(s){} ({sample}). If there is genuinely no querier on \
+             THIS segment, IGMP snooping ages these out (~260s) and stops delivering them to the \
+             port — AVoIP audio/PTP will drop even though the control plane (mDNS / Dante ConMon) \
+             looks healthy. This is a passive listen, so confirm on the VLAN's L3 device (or the \
+             switch acting as querier) before changing config; note a querier on a different \
+             VLAN/group does not serve this segment.",
             scoped.len(),
             if audio_n > 0 {
                 format!(" ({audio_n} carrying audio)")

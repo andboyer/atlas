@@ -2829,10 +2829,12 @@ pub async fn run_deep_probes(
 
     match kind.as_str() {
         "igmp-listen" => {
-            // 130s catches an RFC-3376-default querier (General Query every
-            // 125s) with ~5s of slack. Anything shorter has a meaningful
-            // chance of missing the query even on a healthy network.
-            let json = elevate_and_run_probe(&exe, "igmp-listen", &iface, 130).await?;
+            // 260s (~2x the RFC-3376 125s General Query interval) reliably
+            // catches a healthy querier even when the listen starts just
+            // after a query. A shorter ~130s window has a meaningful chance
+            // of missing the query and producing a false "no querier"
+            // verdict on a perfectly healthy network.
+            let json = elevate_and_run_probe(&exe, "igmp-listen", &iface, 260).await?;
             let igmp: IgmpProbeResult = serde_json::from_str(json.trim())
                 .map_err(|e| format!("parse IgmpProbeResult: {e}; raw={json:?}"))?;
             out.igmp = Some(igmp);
@@ -2918,11 +2920,12 @@ pub async fn run_deep_probes(
             // of its own kind invocation if requested. The `all` mode
             // here therefore only elevates for IGMP.
             //
-            // 130s catches an RFC-3376-default querier (General Query
-            // every 125s). MUST match the standalone igmp-listen branch
+            // 260s (~2x the RFC-3376 125s General Query interval) reliably
+            // catches a healthy querier even when the listen starts just
+            // after a query. MUST match the standalone igmp-listen branch
             // above or "Run all" results will look misleadingly silent
             // vs. "Test IGMP".
-            const IGMP_LISTEN_SECS: u32 = 130;
+            const IGMP_LISTEN_SECS: u32 = 260;
             let igmp_fut = elevate_and_run_probe(&exe, "igmp-listen", &iface, IGMP_LISTEN_SECS);
 
             let (ptp_r, sap_r, link_r, lldp_r, igmp_json) =
@@ -3377,7 +3380,8 @@ pub async fn test_host(state: State<'_, AppState>, host_id: String) -> Result<St
             let t = crate::device::ssh::SshTransport::new();
             t.test(&host).await
         }
-        crate::device::inventory::TransportKind::Https => {
+        crate::device::inventory::TransportKind::Https
+        | crate::device::inventory::TransportKind::Http => {
             let t = crate::device::https::HttpsTransport::new(state.packs.clone());
             t.test(&host).await
         }

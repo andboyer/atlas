@@ -78,7 +78,7 @@ const BUNDLED: &[(&str, &str)] = &[
 pub struct SkillPack {
     pub id: String,
     pub name: String,
-    /// `ssh` or `https`. Must match the host's `transport` at exec time.
+    /// `ssh`, `https`, or `http`. Must match the host's `transport` at exec time.
     pub transport: String,
     #[serde(default)]
     pub description: String,
@@ -234,7 +234,9 @@ mod tests {
         let reg = load_bundled();
         for pack in reg.all() {
             assert!(
-                pack.transport == "ssh" || pack.transport == "https",
+                pack.transport == "ssh"
+                    || pack.transport == "https"
+                    || pack.transport == "http",
                 "pack `{}` has unknown transport `{}`",
                 pack.id,
                 pack.transport

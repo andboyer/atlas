@@ -251,7 +251,7 @@ impl Tool for DeviceExecTool {
 
         let transport: Arc<dyn Transport> = match host.transport {
             TransportKind::Ssh => self.ssh.clone(),
-            TransportKind::Https => self.https.clone(),
+            TransportKind::Https | TransportKind::Http => self.https.clone(),
         };
 
         let resp = match transport.exec(&host, req).await {

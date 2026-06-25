@@ -15,8 +15,8 @@ import {
 import { useApp } from "../store";
 
 // Mirror of crate::device::inventory::{HostEntry, TransportKind, AuthKind, Roles}.
-type TransportKind = "ssh" | "https";
-type AuthKind = "password" | "key" | "api_key";
+type TransportKind = "ssh" | "https" | "http";
+type AuthKind = "password" | "key" | "api_key" | "basic";
 
 interface HostRoles {
   av_switch?: boolean;
@@ -59,7 +59,7 @@ const SKILL_HINT: Record<string, { transport: TransportKind; port: number }> = {
   "mikrotik-routeros": { transport: "ssh", port: 22 },
   "tplink-omada": { transport: "https", port: 443 },
   "unifi": { transport: "https", port: 443 },
-  "luminex-gigacore": { transport: "https", port: 443 },
+  "luminex-gigacore": { transport: "http", port: 80 },
   "q-sys-core": { transport: "https", port: 443 },
 };
 
@@ -182,6 +182,8 @@ function HostForm({
       auth:
         skill === "q-sys-core"
           ? "api_key"
+          : skill === "luminex-gigacore"
+          ? "basic"
           : hint?.transport === "https"
           ? "password"
           : draft.auth,
@@ -266,6 +268,7 @@ function HostForm({
           >
             <option value="ssh">SSH</option>
             <option value="https">HTTPS</option>
+            <option value="http">HTTP</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs">
@@ -280,6 +283,7 @@ function HostForm({
             <option value="password">Password</option>
             <option value="key">SSH key</option>
             <option value="api_key">API key</option>
+            <option value="basic">HTTP Basic</option>
           </select>
         </label>
         <label className="flex flex-col gap-1 text-xs">

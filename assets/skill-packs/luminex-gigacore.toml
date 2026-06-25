@@ -1,53 +1,82 @@
-# Luminex GigaCore skill pack (HTTPS REST).
+# Luminex GigaCore skill pack (HTTP REST).
 #
-# GigaCore web UI exposes a REST API under /api. Used for read-only
-# inspection of group memberships, port profiles, PTP, and snooping state.
+# GigaCore switches (e.g. GigaCore 26i) serve their management REST API
+# over cleartext HTTP on port 80, guarded by HTTP Basic auth (realm
+# "GigaCore<model>"). There is NO /api/login JSON endpoint — credentials
+# ride on every request via the Authorization header, so the host must be
+# configured with transport = "http" and auth = "basic".
+#
+# Endpoints split into two families:
+#   /config/*  current configuration (some JSON, some pipe/slash-delimited text)
+#   /stat/*    live statistics / counters (JSON or delimited text)
+#
+# GigaCore "groups" are L2 broadcast domains (≈ VLANs); IGMP snooping and
+# the IGMP querier are configured per group.
 id = "luminex-gigacore"
 name = "Luminex GigaCore"
-transport = "https"
-description = "Read endpoints on a Luminex GigaCore switch's REST API."
-
-[login]
-path = "/api/login"
-username_field = "username"
-password_field = "password"
+transport = "http"
+description = "Read endpoints on a Luminex GigaCore switch's HTTP REST API (Basic auth)."
 
 [[command]]
 id = "system_info"
 risk = "read"
-template = "/api/system/info"
+template = "/config/switchlegend"
 method = "GET"
-purpose = "Model, firmware, serial."
+purpose = "Switch name, model, serial number, and management MAC."
 parser = ""
 
 [[command]]
-id = "port_status"
+id = "sys_stats"
 risk = "read"
-template = "/api/ports"
+template = "/stat/sys"
 method = "GET"
-purpose = "Per-port link, speed, profile, group membership."
+purpose = "System statistics (uptime, temperature, MAC table usage)."
 parser = ""
 
 [[command]]
 id = "groups"
 risk = "read"
-template = "/api/groups"
+template = "/config/groups"
 method = "GET"
-purpose = "GigaCore group definitions."
+purpose = "Group (≈VLAN) definitions: id, type, name, and member ports."
+parser = ""
+
+[[command]]
+id = "port_status"
+risk = "read"
+template = "/config/ports"
+method = "GET"
+purpose = "Per-port enable state, configured/negotiated speed, and link status."
+parser = ""
+
+[[command]]
+id = "port_stats"
+risk = "read"
+template = "/stat/ports"
+method = "GET"
+purpose = "Per-port RX/TX frame and byte counters."
 parser = ""
 
 [[command]]
 id = "snooping"
 risk = "read"
-template = "/api/multicast/snooping"
+template = "/config/group_igmp"
 method = "GET"
-purpose = "IGMP snooping state per VLAN."
+purpose = "Per-group IGMP snooping enable, querier enable, and querier source IP mode."
+parser = ""
+
+[[command]]
+id = "querier_ips"
+risk = "read"
+template = "/stat/ipmc_querier_ips"
+method = "GET"
+purpose = "Selectable IGMP querier source IPs for this switch (default/primary/secondary)."
 parser = ""
 
 [[command]]
 id = "ptp_status"
 risk = "read"
-template = "/api/ptp/status"
+template = "/config/group_ptp"
 method = "GET"
-purpose = "PTP grandmaster + per-port role."
+purpose = "Per-group PTP configuration (profile, domain, priority)."
 parser = ""

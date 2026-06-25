@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 type Risk = "read" | "mutate" | "dangerous";
-type TransportKind = "ssh" | "https";
+type TransportKind = "ssh" | "https" | "http";
 
 interface ArgSpec {
   name: string;
