@@ -2,6 +2,7 @@ use crate::store::MetricSample;
 use crate::types::{AvDiagnosticsResult, ScanResult};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 // ── Prompt building ───────────────────────────────────────────────────────────
 
@@ -408,6 +409,28 @@ struct OaiChoiceMessage {
     content: String,
 }
 
+/// Shared HTTP client for LLM calls. A finite timeout is essential: a
+/// local Ollama daemon that is up but loading a cold model (or a stalled
+/// socket) will otherwise hang the request forever — which surfaces in the
+/// UI as a permanently "Thinking…" button and looks like the app froze.
+/// The short connect timeout fails fast when nothing is listening on the
+/// host:port; `overall_secs` bounds slow CPU-bound local generations, which
+/// can take several minutes for an 8B model on an Intel Mac.
+fn llm_http_client(overall_secs: u64) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(overall_secs))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Overall request timeout for remote, fast-streaming providers (OpenAI,
+/// Anthropic).
+const REMOTE_TIMEOUT_SECS: u64 = 120;
+/// Overall request timeout for local Ollama. CPU-only generation of a large
+/// prompt can take minutes, so this is deliberately generous.
+const OLLAMA_TIMEOUT_SECS: u64 = 600;
+
 async fn call_openai(
     api_key: &str,
     model: &str,
@@ -430,7 +453,14 @@ async fn call_openai(
         max_tokens: 800,
         temperature: 0.4,
     };
-    let client = reqwest::Client::new();
+    // Local Ollama (any non-default base URL) gets a long timeout for slow
+    // CPU generation; remote OpenAI uses the shorter remote timeout.
+    let timeout_secs = if base_url.is_some() {
+        OLLAMA_TIMEOUT_SECS
+    } else {
+        REMOTE_TIMEOUT_SECS
+    };
+    let client = llm_http_client(timeout_secs);
     let resp = client
         .post(&url)
         .bearer_auth(api_key)
@@ -447,6 +477,80 @@ async fn call_openai(
         .next()
         .map(|c| c.message.content)
         .unwrap_or_default())
+}
+
+// ── OpenAI-compatible tool-calling (agentic chat) ─────────────────────────────
+
+/// Single round-trip against an OpenAI-compatible `/v1/chat/completions`
+/// endpoint (OpenAI itself or a local Ollama server) with optional `tools`.
+///
+/// `messages` are raw OpenAI message objects (so the caller can include
+/// `tool` role results and assistant messages carrying `tool_calls`).
+/// Returns the assistant `message` object verbatim so the orchestrator can
+/// inspect `content` and `tool_calls`. Used by the chat agent loop; the
+/// orchestration (executing tool calls, looping) lives in `commands.rs`
+/// because it needs the device-execution `AppState`.
+pub async fn chat_completion_raw(
+    provider: &str,
+    api_key: &str,
+    model: &str,
+    base_url: Option<&str>,
+    messages: Vec<Value>,
+    tools: Option<Value>,
+) -> Result<Value> {
+    // Resolve the endpoint base the same way `dispatch` does for the
+    // OpenAI-compatible providers.
+    let (base, is_ollama) = match provider {
+        "ollama" => (base_url.unwrap_or("http://127.0.0.1:11434"), true),
+        _ => (base_url.unwrap_or("https://api.openai.com"), false),
+    };
+    let url = format!("{base}/v1/chat/completions");
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "max_tokens": 800,
+        "temperature": 0.3,
+    });
+    if let Some(t) = tools {
+        body["tools"] = t;
+        body["tool_choice"] = Value::String("auto".into());
+    }
+
+    let timeout_secs = if is_ollama {
+        OLLAMA_TIMEOUT_SECS
+    } else {
+        REMOTE_TIMEOUT_SECS
+    };
+    let client = llm_http_client(timeout_secs);
+
+    let send = async {
+        let resp = client
+            .post(&url)
+            .bearer_auth(api_key)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Value>()
+            .await?;
+        Ok::<Value, anyhow::Error>(resp)
+    };
+
+    let resp = match send.await {
+        Ok(v) => v,
+        Err(e) if is_ollama => return Err(friendly_ollama_error(base, model, &e)),
+        Err(e) => return Err(e),
+    };
+
+    // choices[0].message — the assistant turn (content and/or tool_calls).
+    let message = resp
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("LLM response missing choices[0].message"))?;
+    Ok(message)
 }
 
 // ── Anthropic ────────────────────────────────────────────────────────────────
@@ -497,7 +601,7 @@ async fn call_anthropic(api_key: &str, model: &str, messages: &[ChatMessage]) ->
         system,
         messages: chat_messages,
     };
-    let client = reqwest::Client::new();
+    let client = llm_http_client(REMOTE_TIMEOUT_SECS);
     let resp = client
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", api_key)
@@ -539,6 +643,13 @@ fn chat_system_message(scan: &ScanResult, history: Option<&MetricHistory>) -> Ch
     }
 }
 
+/// Public accessor for the interactive-chat system prompt content. The chat
+/// agent loop in `commands.rs` builds its own message list (with tool
+/// schemas) and needs the same diagnostic context string.
+pub fn chat_system_prompt(scan: &ScanResult, history: Option<&MetricHistory>) -> String {
+    chat_system_message(scan, history).content
+}
+
 /// Public wrapper around [`dispatch`] for callers outside this module that
 /// need to send an arbitrary message list (e.g. the causal narrator).
 pub async fn dispatch_public(
@@ -566,7 +677,7 @@ async fn dispatch(
     match provider {
         "anthropic" => call_anthropic(api_key, model, messages).await,
         "ollama" => {
-            let url = base_url.unwrap_or("http://localhost:11434");
+            let url = base_url.unwrap_or("http://127.0.0.1:11434");
             call_openai(api_key, model, Some(url), messages)
                 .await
                 .map_err(|e| friendly_ollama_error(url, model, &e))
@@ -591,7 +702,14 @@ fn friendly_ollama_error(url: &str, model: &str, err: &anyhow::Error) -> anyhow:
     }
 
     if let Some(r) = req_err {
-        if r.is_connect() || r.is_timeout() {
+        if r.is_timeout() {
+            return anyhow::anyhow!(
+                "Ollama timed out while generating a response with `{model}` at {url}. \
+                 Local models can be slow on CPU-only machines — try a smaller/faster \
+                 model (e.g. `ollama pull llama3.2:3b`) or ask a shorter question."
+            );
+        }
+        if r.is_connect() {
             return anyhow::anyhow!(
                 "Cannot reach Ollama at {url}. Make sure the Ollama app is running \
                  (`ollama serve`) and that a model is installed (e.g. `ollama pull {model}`)."

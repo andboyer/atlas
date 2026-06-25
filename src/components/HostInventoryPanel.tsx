@@ -12,6 +12,7 @@ import {
   Save,
   PlugZap,
 } from "lucide-react";
+import { useApp } from "../store";
 
 // Mirror of crate::device::inventory::{HostEntry, TransportKind, AuthKind, Roles}.
 type TransportKind = "ssh" | "https";
@@ -84,6 +85,62 @@ function emptyHost(): HostEntry {
 function slugifyId(alias: string, hostname: string): string {
   const seed = (alias || hostname || "host").toLowerCase();
   return seed.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+}
+
+// ── Wire <-> form adapters ──────────────────────────────────────────────
+// The Rust `HostEntry` represents roles as a string array (e.g.
+// ["av_switch","router"]) and key_path/site/av_switch_uplink_port as plain
+// (possibly empty) strings. The form models roles as a checkbox object and
+// uses `null` for empty optional fields, so we translate at the boundary.
+const ROLE_KEYS: Array<keyof HostRoles> = [
+  "av_switch",
+  "spine",
+  "edge",
+  "wifi_controller",
+  "audio_dsp",
+  "router",
+];
+
+/** Shape sent to / received from Rust (`crate::device::inventory::HostEntry`). */
+interface WireHostEntry extends Omit<HostEntry, "roles" | "key_path" | "site" | "av_switch_uplink_port"> {
+  roles: string[];
+  key_path: string;
+  site: string;
+  av_switch_uplink_port: string;
+}
+
+function rolesToArray(r: HostRoles): string[] {
+  return ROLE_KEYS.filter((k) => !!r[k]);
+}
+
+function rolesFromArray(a: string[]): HostRoles {
+  const out: HostRoles = {};
+  for (const k of a) {
+    if ((ROLE_KEYS as string[]).includes(k)) out[k as keyof HostRoles] = true;
+  }
+  return out;
+}
+
+/** Form entry → Rust payload (objects/nulls → arrays/empty strings). */
+function toWire(e: HostEntry): WireHostEntry {
+  return {
+    ...e,
+    key_path: e.key_path ?? "",
+    site: e.site ?? "",
+    av_switch_uplink_port: e.av_switch_uplink_port ?? "",
+    roles: rolesToArray(e.roles),
+  };
+}
+
+/** Rust payload → form entry (arrays/empty strings → objects/nulls). */
+function fromWire(raw: WireHostEntry): HostEntry {
+  return {
+    ...raw,
+    key_path: raw.key_path || null,
+    site: raw.site || null,
+    av_switch_uplink_port: raw.av_switch_uplink_port || null,
+    roles: Array.isArray(raw.roles) ? rolesFromArray(raw.roles) : {},
+  };
 }
 
 interface HostFormProps {
@@ -389,14 +446,22 @@ export function HostInventoryPanel() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<Record<string, string>>({});
+  // Host id awaiting a second click to confirm deletion. `window.confirm`
+  // is unreliable inside the Tauri webview (it silently returns false), so
+  // we use an inline two-step confirm instead.
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const prefillHost = useApp((s) => s.prefillHost);
+  const clearPrefillHost = useApp((s) => s.clearPrefillHost);
 
   const refresh = useCallback(async () => {
     try {
       const [hs, ps] = await Promise.all([
-        invoke<HostEntry[]>("list_hosts"),
+        invoke<WireHostEntry[]>("list_hosts"),
         invoke<SkillPackLite[]>("list_skill_packs"),
       ]);
-      setHosts(hs);
+      setHosts(hs.map(fromWire));
       setPacks(ps);
     } catch (e) {
       setError(String(e));
@@ -406,6 +471,19 @@ export function HostInventoryPanel() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // When the IP Scanner asks to add a host, open the create form pre-filled
+  // with its IP/alias and clear the request so it fires only once.
+  useEffect(() => {
+    if (!prefillHost) return;
+    setCreating({
+      ...emptyHost(),
+      hostname: prefillHost.hostname,
+      alias: prefillHost.alias ?? prefillHost.hostname,
+    });
+    setEditing(null);
+    clearPrefillHost();
+  }, [prefillHost, clearPrefillHost]);
 
   const handleStartCreate = () => {
     setCreating(emptyHost());
@@ -419,7 +497,7 @@ export function HostInventoryPanel() {
     try {
       const entry = { ...creating };
       if (!entry.id) entry.id = slugifyId(entry.alias, entry.hostname);
-      await invoke<HostEntry>("upsert_host", { entry });
+      await invoke<WireHostEntry>("upsert_host", { entry: toWire(entry) });
       setCreating(null);
       await refresh();
     } catch (e) {
@@ -434,7 +512,7 @@ export function HostInventoryPanel() {
     setSaving(true);
     setError(null);
     try {
-      await invoke<HostEntry>("upsert_host", { entry: editing });
+      await invoke<WireHostEntry>("upsert_host", { entry: toWire(editing) });
       setEditing(null);
       await refresh();
     } catch (e) {
@@ -445,13 +523,16 @@ export function HostInventoryPanel() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm(`Delete host "${id}"? Stored credentials will also be removed.`))
-      return;
+    setDeleting(id);
+    setError(null);
     try {
       await invoke<void>("delete_host", { hostId: id });
+      setConfirmingDelete(null);
       await refresh();
     } catch (e) {
       setError(String(e));
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -610,14 +691,36 @@ export function HostInventoryPanel() {
                     <Pencil className="h-3 w-3" />
                     Edit
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(h.id)}
-                    className="inline-flex items-center gap-1 rounded border border-rose-500/40 px-2 py-1 text-[11px] text-rose-300 hover:bg-rose-500/15"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    Delete
-                  </button>
+                  {confirmingDelete === h.id ? (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(h.id)}
+                        disabled={deleting === h.id}
+                        className="inline-flex items-center gap-1 rounded border border-rose-500/60 bg-rose-500/15 px-2 py-1 text-[11px] font-medium text-rose-200 hover:bg-rose-500/25 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        {deleting === h.id ? "Deleting…" : "Confirm"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingDelete(null)}
+                        disabled={deleting === h.id}
+                        className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-1 text-[11px] hover:border-[var(--color-accent)]/40 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingDelete(h.id)}
+                      className="inline-flex items-center gap-1 rounded border border-rose-500/40 px-2 py-1 text-[11px] text-rose-300 hover:bg-rose-500/15"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </button>
+                  )}
                 </div>
               </div>
             </article>

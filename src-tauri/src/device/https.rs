@@ -136,7 +136,8 @@ impl HttpsTransport {
         }
         // Some controllers (Omada) deliver a CSRF token in the JSON body
         // that must be echoed on subsequent mutating requests. We're
-        // read-only in v1 so we don't capture it; that's a Phase-6 task.
+        // currently read-heavy and don't capture it yet; that's a follow-up
+        // for richer controller-side mutate workflows.
         let _ = resp.bytes().await;
         self.mark_logged_in(&host.id);
         Ok(())

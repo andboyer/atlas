@@ -2,7 +2,59 @@
 /// "aa:bb:cc" form) to a vendor string. Curated for POS/IoT/AP vendors
 /// most relevant to the troubleshooter's rules. Not exhaustive — full IEEE
 /// OUI bundle is ~4 MB and overkill for v1.
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+
+/// Full IEEE MA-L registry (~40k OUIs), bundled at build time as a compact
+/// `aabbcc<TAB>Vendor` TSV. Parsed once on first lookup. The curated table
+/// above takes precedence so friendlier product names (e.g. "Square / Block")
+/// win over the raw registrant name.
+static OUI_DB: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+    let raw = include_str!("oui_db.tsv");
+    let mut m = HashMap::with_capacity(40_000);
+    for line in raw.lines() {
+        if let Some((k, v)) = line.split_once('\t') {
+            m.insert(k, v);
+        }
+    }
+    m
+});
+
+/// Resolve a vendor for a MAC. Tries the curated product table first, then the
+/// full IEEE registry. Locally-administered (randomized) MACs aren't registered
+/// to anyone, so they're labelled as such instead of returning nothing.
 pub fn vendor_for_mac(mac: &str) -> Option<&'static str> {
+    if let Some(v) = curated_vendor(mac).or_else(|| db_vendor(mac)) {
+        return Some(v);
+    }
+    if is_locally_administered(mac) {
+        return Some("Randomized MAC");
+    }
+    None
+}
+
+/// Look up the 24-bit OUI in the bundled IEEE registry. Expects a normalized
+/// `aa:bb:cc:...` MAC.
+fn db_vendor(mac: &str) -> Option<&'static str> {
+    let prefix = mac.get(0..8)?; // "aa:bb:cc"
+    let key: String = prefix.chars().filter(|c| *c != ':').collect();
+    OUI_DB.get(key.as_str()).copied()
+}
+
+/// True when the locally-administered bit (0x02) is set and the multicast bit
+/// (0x01) is clear — i.e. a privately-assigned / randomized unicast address
+/// (modern phones rotate these per-SSID), which has no registered vendor.
+fn is_locally_administered(mac: &str) -> bool {
+    match mac.get(0..2).and_then(|h| u8::from_str_radix(h, 16).ok()) {
+        Some(b) => (b & 0x02) != 0 && (b & 0x01) == 0,
+        None => false,
+    }
+}
+
+/// Curated table of friendly product/vendor names for prefixes most relevant
+/// to the troubleshooter's POS/IoT/AP rules. Maps the upper 24 bits of a MAC
+/// (normalized "aa:bb:cc" form) to a vendor string.
+fn curated_vendor(mac: &str) -> Option<&'static str> {
     let prefix = mac.get(0..8)?; // "aa:bb:cc"
                                  // Some vendors use multiple prefixes; list each separately.
     match prefix {
@@ -90,5 +142,17 @@ mod tests {
     #[test]
     fn unknown_prefix_returns_none() {
         assert_eq!(vendor_for_mac("ff:ff:ff:00:00:01"), None);
+    }
+
+    #[test]
+    fn resolves_from_bundled_ieee_registry() {
+        // Not in the curated table, but present in the IEEE MA-L registry.
+        assert!(vendor_for_mac("28:6f:b9:00:00:01").is_some());
+    }
+
+    #[test]
+    fn labels_randomized_locally_administered_mac() {
+        // 0x02 set, 0x01 clear → locally-administered unicast (randomized).
+        assert_eq!(vendor_for_mac("a2:bb:cc:dd:ee:ff"), Some("Randomized MAC"));
     }
 }

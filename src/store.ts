@@ -5,6 +5,7 @@ import type {
   AvDiagnosticsResult,
   AvInsight,
   DeviceEvent,
+  IpScanResult,
   LiveSample,
   Narrative,
   RadioInsight,
@@ -20,6 +21,18 @@ import type {
 const LIVE_RING_CAPACITY = 3600; // 60 min @ 1 Hz, matches backend.
 const WIFI_EVENTS_CAPACITY = 500; // matches backend ring.
 const NARRATIVES_CAPACITY = 50; // matches backend ring.
+
+/** A single turn in the assistant (chat) session. `isError` marks a failed
+ *  LLM call so the UI can style it distinctly. */
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  isError?: boolean;
+  /** Transient progress line emitted by the agent while it runs a device
+   *  tool call (e.g. "Ran show_interfaces on core-sw-1"). Rendered muted and
+   *  excluded from the history sent back to the model. */
+  step?: boolean;
+}
 
 /**
  * Parse the JSON envelope the `radio_insights` backend returns. Models
@@ -147,6 +160,27 @@ interface AppState {
   explaining: boolean;
   explainFindings: () => Promise<void>;
 
+  /** Assistant (chat) session — persisted in the store so it survives
+   *  navigating away from the panel and lasts until the app is closed. */
+  chatMessages: ChatMessage[];
+  chatInput: string;
+  chatOpen: boolean;
+  /** Whether the persistent right-side assistant dock is collapsed. */
+  assistantDockCollapsed: boolean;
+  setAssistantDockCollapsed: (collapsed: boolean) => void;
+  /** True while a chat_query is in flight. Lives in the store so the request
+   *  keeps running (and the result still lands) when the panel unmounts. */
+  chatLoading: boolean;
+  setChatMessages: (updater: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
+  setChatInput: (value: string) => void;
+  setChatOpen: (open: boolean) => void;
+  clearChat: () => void;
+  /** Append a transient agent progress step while a turn is in flight. */
+  appendChatStep: (content: string) => void;
+  /** Send a question to the LLM. Runs to completion independent of the panel
+   *  being mounted, so tabbing away never aborts an in-flight request. */
+  sendChat: (scanResult: ScanResult, question: string) => Promise<void>;
+
   /** Structured radio-only suggestions from the LLM (parsed from the
    *  `radio_insights` command's JSON response). */
   radioInsights: RadioInsight[] | null;
@@ -198,12 +232,69 @@ interface AppState {
   runQuickScan: () => Promise<void>;
   refreshHistory: () => Promise<void>;
   subscribeToScanEvents: () => Promise<() => void>;
+
+  // ── Cross-tab navigation ──
+  /** When set, App switches to this tab on the next render, then clears it. */
+  requestedTab: string | null;
+  /** Runbook id the Runbooks panel should pre-select when it mounts/updates. */
+  pendingRunbookId: string | null;
+  /** Jump to the Runbooks tab with `id` pre-selected (one-click "Diagnose"). */
+  openRunbook: (id: string) => void;
+  clearRequestedTab: () => void;
+  clearPendingRunbook: () => void;
+  /** Host fields to pre-fill the Fleet "Add host" form (from the IP Scanner). */
+  prefillHost: { hostname: string; alias?: string } | null;
+  /** Jump to the Fleet tab with the add-host form pre-filled. */
+  addHostToFleet: (host: { hostname: string; alias?: string }) => void;
+  clearPrefillHost: () => void;
+
+  // ── IP Scanner (persisted across tab switches) ──
+  /** Last subnet sweep result, kept in the store so it survives unmounts. */
+  ipScanResult: IpScanResult | null;
+  /** CIDR currently shown in the IP Scanner input. */
+  ipScanCidr: string;
+  /** True while a sweep is in flight. */
+  ipScanLoading: boolean;
+  /** Last sweep error, if any. */
+  ipScanError: string | null;
+  setIpScanCidr: (cidr: string) => void;
+  runSubnetScan: (cidr?: string | null) => Promise<void>;
 }
 
 export const useApp = create<AppState>((set, get) => ({
   scanning: false,
   lastScan: null,
   error: null,
+
+  requestedTab: null,
+  pendingRunbookId: null,
+  openRunbook: (id: string) =>
+    set({ pendingRunbookId: id, requestedTab: "runbooks" }),
+  clearRequestedTab: () => set({ requestedTab: null }),
+  clearPendingRunbook: () => set({ pendingRunbookId: null }),
+  prefillHost: null,
+  addHostToFleet: (host) => set({ prefillHost: host, requestedTab: "fleet" }),
+  clearPrefillHost: () => set({ prefillHost: null }),
+
+  ipScanResult: null,
+  ipScanCidr: "",
+  ipScanLoading: false,
+  ipScanError: null,
+  setIpScanCidr: (cidr: string) => set({ ipScanCidr: cidr }),
+  runSubnetScan: async (cidr?: string | null) => {
+    if (get().ipScanLoading) return;
+    set({ ipScanLoading: true, ipScanError: null });
+    try {
+      const res = await invoke<IpScanResult>("scan_subnet", {
+        cidr: (cidr ?? get().ipScanCidr).trim() || null,
+      });
+      set({ ipScanResult: res, ipScanCidr: res.cidr });
+    } catch (e) {
+      set({ ipScanError: String(e) });
+    } finally {
+      set({ ipScanLoading: false });
+    }
+  },
 
   recentScans: [],
   recentEvents: [],
@@ -279,6 +370,64 @@ export const useApp = create<AppState>((set, get) => ({
       set({ explanation: text, explaining: false });
     } catch (e) {
       set({ explanation: `Error: ${String(e)}`, explaining: false });
+    }
+  },
+
+  chatMessages: [],
+  chatInput: "",
+  chatOpen: false,
+  assistantDockCollapsed: false,
+  setAssistantDockCollapsed: (collapsed) =>
+    set({ assistantDockCollapsed: collapsed }),
+  chatLoading: false,
+  setChatMessages: (updater) =>
+    set((s) => ({
+      chatMessages:
+        typeof updater === "function" ? updater(s.chatMessages) : updater,
+    })),
+  setChatInput: (value) => set({ chatInput: value }),
+  setChatOpen: (open) => set({ chatOpen: open }),
+  clearChat: () => set({ chatMessages: [], chatInput: "" }),
+  appendChatStep: (content) =>
+    set((s) =>
+      s.chatLoading
+        ? {
+            chatMessages: [
+              ...s.chatMessages,
+              { role: "assistant", content, step: true },
+            ],
+          }
+        : {},
+    ),
+  sendChat: async (scanResult, question) => {
+    if (get().chatLoading) return;
+    const history = get().chatMessages;
+    // Strip transient agent step lines — only real user/assistant turns are
+    // sent back to the model as conversation history.
+    const cleanHistory = history.filter((m) => !m.step);
+    const withQuestion: ChatMessage[] = [
+      ...history,
+      { role: "user", content: question },
+    ];
+    set({ chatMessages: withQuestion, chatInput: "", chatLoading: true });
+    try {
+      const answer = await invoke<string>("chat_agent", {
+        scanResult,
+        history: cleanHistory, // history before the new question
+        question,
+      });
+      set((s) => ({
+        chatMessages: [...s.chatMessages, { role: "assistant", content: answer }],
+        chatLoading: false,
+      }));
+    } catch (e) {
+      set((s) => ({
+        chatMessages: [
+          ...s.chatMessages,
+          { role: "assistant", content: String(e), isError: true },
+        ],
+        chatLoading: false,
+      }));
     }
   },
 

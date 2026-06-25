@@ -83,8 +83,7 @@ pub struct AppState {
     pub packs: crate::device::pack::PackRegistry,
     /// Append-only audit log of every `device.exec` invocation.
     pub audit: crate::device::audit::Audit,
-    /// Approval centre for `Mutate` / `Dangerous` commands. v1 packs are
-    /// 100% `Read` so nothing trips it; wired for Phase 6 write commands.
+    /// Approval centre for `Mutate` / `Dangerous` commands.
     pub approval: crate::device::approval::ApprovalCenter,
     /// User runbooks directory (`<app-data>/runbooks/`).
     pub user_runbooks_dir: PathBuf,
@@ -710,9 +709,437 @@ pub async fn chat_query(
     .map_err(|e| e.to_string())
 }
 
-/// Pull the most useful time-series for the LLM context — about an hour of
-/// each headline metric. Errors are swallowed (empty list) so a transient
-/// store hiccup doesn't break the LLM flow.
+/// Maximum number of LLM round-trips in one agentic chat turn. Each
+/// iteration may execute one or more tool calls before the model is asked
+/// again. Bounds runaway loops and slow CPU-bound local generation.
+const CHAT_AGENT_MAX_ITERS: usize = 6;
+
+/// Agentic chat: like [`chat_query`] but exposes the `device_exec` tool so a
+/// tool-capable model (e.g. `qwen2.5`) can run real SSH/HTTPS diagnostics on
+/// configured hosts, gated by the existing approval modal. Falls back to the
+/// plain narrator chat when the provider lacks tool support or no hosts are
+/// configured.
+#[tauri::command]
+pub async fn chat_agent(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    scan_result: ScanResult,
+    history: Vec<FrontendChatMessage>,
+    question: String,
+) -> Result<String, String> {
+    use tauri::Emitter;
+
+    let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
+    let provider = settings
+        .llm_provider
+        .as_deref()
+        .unwrap_or("openai")
+        .to_string();
+    let api_key = resolve_api_key(&provider, settings.llm_api_key.clone())?;
+    let model = settings
+        .llm_model
+        .clone()
+        .unwrap_or_else(|| default_model(&provider));
+    let base_url = resolve_base_url(&provider, settings.llm_base_url.clone());
+
+    let hosts = state.inventory.lock().hosts.clone();
+
+    // Tool-calling is only available on OpenAI-compatible providers and only
+    // makes sense when there are devices to act on. Otherwise answer with the
+    // plain narrator chat so the assistant still responds.
+    let tools_supported = matches!(provider.as_str(), "openai" | "ollama");
+    if !tools_supported || hosts.is_empty() {
+        let llm_history: Vec<crate::llm::ChatMessage> = history
+            .into_iter()
+            .map(|m| crate::llm::ChatMessage {
+                role: m.role,
+                content: m.content,
+            })
+            .collect();
+        let metric_history = collect_metric_history(&state.store);
+        return crate::llm::chat_query(
+            &provider,
+            &api_key,
+            &model,
+            base_url.as_deref(),
+            &scan_result,
+            Some(&metric_history),
+            llm_history,
+            &question,
+        )
+        .await
+        .map_err(|e| e.to_string());
+    }
+
+    // device_exec tool schema. The host enum constrains the model to known
+    // inventory ids; the catalog in the system prompt enumerates valid cmds.
+    let host_ids: Vec<serde_json::Value> = hosts
+        .iter()
+        .map(|h| serde_json::Value::String(h.id.clone()))
+        .collect();
+    let tools = serde_json::json!([{
+        "type": "function",
+        "function": {
+            "name": "device_exec",
+            "description": "Run one allowlisted diagnostic command from a configured network device's skill pack over SSH/HTTPS. Only host+command pairs from the DEVICE CATALOG are valid. Read commands run immediately; mutate/dangerous commands require operator approval and may be denied. Returns parsed JSON output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "host": { "type": "string", "description": "Configured host id to target.", "enum": host_ids },
+                    "cmd": { "type": "string", "description": "Skill-pack command id to run on that host (see DEVICE CATALOG)." },
+                    "args": { "type": "object", "description": "Optional command arguments as key/value pairs, e.g. {\"iface\":\"Gi1/0/24\"}. Keys must match the command's declared args." }
+                },
+                "required": ["host", "cmd"]
+            }
+        }
+    }]);
+
+    // System prompt: diagnostic context + device catalog + tool guidance.
+    let metric_history = collect_metric_history(&state.store);
+    let mut system = crate::llm::chat_system_prompt(&scan_result, Some(&metric_history));
+    system.push_str(
+        "\n\n# DEVICE CATALOG\nYou can run diagnostics on these configured network \
+         devices by calling the `device_exec` tool. Use ONLY these host ids and \
+         command ids.\n\n",
+    );
+    system.push_str(&build_device_catalog(&hosts, &state.packs));
+    system.push_str(
+        "\n\nGuidance: When the user asks you to inspect, diagnose, or check a \
+         switch/AP/controller, call `device_exec` to gather real data before \
+         answering. Prefer read commands. Chain multiple calls if needed. When you \
+         have enough information, give a concise final answer that cites the \
+         findings. If no configured device fits the request, say so plainly.",
+    );
+
+    let mut messages: Vec<serde_json::Value> = Vec::new();
+    messages.push(serde_json::json!({ "role": "system", "content": system }));
+    for m in &history {
+        messages.push(serde_json::json!({ "role": m.role, "content": m.content }));
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": question }));
+
+    // Device tool + approval event pump. Reusing the runbook approval event
+    // ("runbook-event") means the existing always-on ApprovalModal handles
+    // mutate/dangerous gating during chat with no extra frontend wiring.
+    let device_tool = crate::device::exec_tool::DeviceExecTool::new(
+        state.inventory.clone(),
+        state.packs.clone(),
+        state.audit.clone(),
+        state.approval.clone(),
+        model.clone(),
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::runbook::RunbookEvent>();
+    let app_pump = app.clone();
+    let pump = tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            let _ = app_pump.emit("runbook-event", &ev);
+        }
+    });
+    let ctx = crate::runbook::tools::ToolContext {
+        pinned_iface: None,
+        timeout: Duration::from_secs(90),
+        event_tx: Some(tx),
+    };
+
+    let mut final_answer = String::new();
+    for _ in 0..CHAT_AGENT_MAX_ITERS {
+        let msg = match crate::llm::chat_completion_raw(
+            &provider,
+            &api_key,
+            &model,
+            base_url.as_deref(),
+            messages.clone(),
+            Some(tools.clone()),
+        )
+        .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                drop(ctx);
+                let _ = pump.await;
+                return Err(e.to_string());
+            }
+        };
+
+        // Record the assistant turn verbatim so tool_call ids line up.
+        messages.push(msg.clone());
+
+        let tool_calls = msg
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if tool_calls.is_empty() {
+            final_answer = msg
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            break;
+        }
+
+        for call in tool_calls {
+            let call_id = call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let fname = call
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let raw_args = call
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let parsed_args: serde_json::Value = match raw_args {
+                serde_json::Value::String(s) => {
+                    serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}))
+                }
+                obj @ serde_json::Value::Object(_) => obj,
+                _ => serde_json::json!({}),
+            };
+
+            let result = if fname == "device_exec" {
+                run_device_exec_call(&device_tool, &ctx, &parsed_args).await
+            } else {
+                serde_json::json!({ "error": format!("unknown tool `{fname}`") })
+            };
+
+            // Surface a transcript step to the UI.
+            let _ = app.emit(
+                "chat-agent-step",
+                &serde_json::json!({
+                    "tool": fname,
+                    "host": parsed_args.get("host").cloned().unwrap_or(serde_json::Value::Null),
+                    "cmd": parsed_args.get("cmd").cloned().unwrap_or(serde_json::Value::Null),
+                    "result": result.clone(),
+                }),
+            );
+
+            messages.push(serde_json::json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": result.to_string(),
+            }));
+        }
+    }
+
+    drop(ctx);
+    let _ = pump.await;
+
+    if final_answer.trim().is_empty() {
+        final_answer = "I gathered device data but couldn't compose a final answer \
+                        within the step limit. Please ask a more specific question."
+            .to_string();
+    }
+    Ok(final_answer)
+}
+
+/// Run a single `device_exec` tool call from the chat agent. Maps the LLM's
+/// `{host, cmd, args}` shape into the flat arg map `DeviceExecTool` expects
+/// and converts tool errors into a JSON object the model can read and act on.
+async fn run_device_exec_call(
+    tool: &crate::device::exec_tool::DeviceExecTool,
+    ctx: &crate::runbook::tools::ToolContext,
+    args: &serde_json::Value,
+) -> serde_json::Value {
+    use crate::runbook::tools::Tool;
+    let host = args.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    let cmd = args.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+    if host.is_empty() || cmd.is_empty() {
+        return serde_json::json!({ "error": "device_exec requires both `host` and `cmd`." });
+    }
+    let mut exec_args = serde_json::json!({ "host": host, "cmd": cmd });
+    if let (Some(obj), Some(map)) = (
+        args.get("args").and_then(|v| v.as_object()),
+        exec_args.as_object_mut(),
+    ) {
+        for (k, v) in obj {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    match tool.run(exec_args, ctx).await {
+        Ok(v) => v,
+        Err(e) => serde_json::json!({ "error": e.to_string() }),
+    }
+}
+
+/// Render the device catalog shown to the model in the system prompt: one
+/// block per configured host listing its allowlisted skill-pack commands.
+fn build_device_catalog(
+    hosts: &[crate::device::inventory::HostEntry],
+    packs: &crate::device::pack::PackRegistry,
+) -> String {
+    let mut out = String::new();
+    for h in hosts {
+        out.push_str(&format!(
+            "- host `{}` (\"{}\") — skill {}, transport {:?}, hostname {}",
+            h.id, h.alias, h.skill, h.transport, h.hostname
+        ));
+        if !h.roles.is_empty() {
+            out.push_str(&format!(", roles [{}]", h.roles.join(", ")));
+        }
+        out.push('\n');
+        match packs.get(&h.skill) {
+            Some(pack) => {
+                for c in &pack.commands {
+                    let args_desc = if c.args.is_empty() {
+                        String::new()
+                    } else {
+                        let names: Vec<String> = c
+                            .args
+                            .iter()
+                            .map(|a| {
+                                let req = if a.required { ", required" } else { "" };
+                                format!("{}({}{})", a.name, a.kind, req)
+                            })
+                            .collect();
+                        format!(" — args: {}", names.join(", "))
+                    };
+                    out.push_str(&format!(
+                        "    * {} [{}]: {}{}\n",
+                        c.id,
+                        c.risk.as_str(),
+                        c.purpose,
+                        args_desc
+                    ));
+                }
+            }
+            None => out.push_str("    (skill pack not found — no commands available)\n"),
+        }
+    }
+    out
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// IP Scanner — active subnet sweep.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Resolve the IPv4 of the NIC the scanner should sweep from (the global
+/// pinned interface, else the kernel default).
+fn scanner_iface_ipv4(state: &State<'_, AppState>) -> Option<String> {
+    let name = resolved_iface(state, None).or_else(crate::probes::iface::default_interface)?;
+    crate::probes::iface::find_by_name(&name).and_then(|i| i.ipv4)
+}
+
+/// Suggest a default `/24` CIDR derived from the active interface so the UI can
+/// pre-fill the scan range.
+#[tauri::command]
+pub async fn default_scan_cidr(state: State<'_, AppState>) -> Result<String, String> {
+    let ipv4 = scanner_iface_ipv4(&state).unwrap_or_default();
+    Ok(crate::discovery::ipscan::default_cidr_for(&ipv4))
+}
+
+/// Actively sweep a subnet for live hosts. When `cidr` is omitted/blank the
+/// range is derived from the active interface (`/24`).
+#[tauri::command]
+pub async fn scan_subnet(
+    state: State<'_, AppState>,
+    cidr: Option<String>,
+) -> Result<crate::discovery::ipscan::IpScanResult, String> {
+    let iface = resolved_iface(&state, None);
+    let cidr = match cidr {
+        Some(c) if !c.trim().is_empty() => c,
+        _ => {
+            let ipv4 = scanner_iface_ipv4(&state).unwrap_or_default();
+            crate::discovery::ipscan::default_cidr_for(&ipv4)
+        }
+    };
+    crate::discovery::ipscan::scan_subnet(&cidr, iface).await
+}
+
+/// Validate a host/username token so it can be embedded in a shell/AppleScript
+/// command without injection risk. Allows the characters that legitimately
+/// appear in IPv4/IPv6 literals, DNS names, and POSIX usernames.
+fn is_safe_token(s: &str, allow_colon: bool) -> bool {
+    !s.is_empty()
+        && s.len() <= 255
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '.' | '-' | '_')
+                || (allow_colon && c == ':')
+        })
+}
+
+/// Open a native terminal window with an interactive `ssh` session to `host`.
+/// The host is one the operator picked from the IP-scanner table, so this is
+/// a convenience launcher — credentials/known-hosts are handled by the user's
+/// own ssh client, not Atlas.
+#[tauri::command]
+pub async fn open_ssh_terminal(
+    host: String,
+    port: Option<u16>,
+    username: Option<String>,
+) -> Result<(), String> {
+    let host = host.trim().to_string();
+    if !is_safe_token(&host, true) {
+        return Err(format!("invalid host `{host}`"));
+    }
+    let port = port.unwrap_or(22);
+    let target = match username.as_deref().map(str::trim) {
+        Some(u) if !u.is_empty() => {
+            if !is_safe_token(u, false) {
+                return Err(format!("invalid username `{u}`"));
+            }
+            format!("{u}@{host}")
+        }
+        _ => host.clone(),
+    };
+    // Bare `ssh` command line — every token is charset-validated above.
+    let ssh_cmd = format!("ssh -p {port} {target}");
+
+    #[cfg(target_os = "macos")]
+    {
+        // Drive Terminal.app via AppleScript so the session opens in a real,
+        // interactive window the operator can type into.
+        let script = format!(
+            "tell application \"Terminal\"\nactivate\ndo script \"{ssh_cmd}\"\nend tell"
+        );
+        std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .spawn()
+            .map_err(|e| format!("failed to launch Terminal: {e}"))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // `start` opens a new console window running ssh; `cmd /k` keeps it
+        // open after the session ends so errors stay visible.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", "cmd", "/k", &ssh_cmd])
+            .spawn()
+            .map_err(|e| format!("failed to launch terminal: {e}"))?;
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Try a sequence of common terminal emulators, holding the window open
+        // with a trailing shell so the session and any errors remain visible.
+        let hold = format!("{ssh_cmd}; exec $SHELL");
+        let candidates: &[(&str, &[&str])] = &[
+            ("x-terminal-emulator", &["-e", "sh", "-c"]),
+            ("gnome-terminal", &["--", "sh", "-c"]),
+            ("konsole", &["-e", "sh", "-c"]),
+            ("xterm", &["-e", "sh", "-c"]),
+        ];
+        for (bin, pre) in candidates {
+            let mut cmd = std::process::Command::new(bin);
+            cmd.args(*pre).arg(&hold);
+            if cmd.spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        Err("no supported terminal emulator found (tried gnome-terminal, konsole, xterm)".into())
+    }
+}
+
+
 fn collect_metric_history(store: &Store) -> crate::llm::MetricHistory {
     const METRICS: &[(&str, &str)] = &[
         ("link.rssi_dbm", "RSSI (dBm)"),
@@ -755,11 +1182,13 @@ fn resolve_api_key(provider: &str, configured: Option<String>) -> Result<String,
     }
 }
 
-/// Default Ollama to localhost when no base URL is set so users don't have to fill it in.
+/// Default Ollama to 127.0.0.1 when no base URL is set so users don't have to fill
+/// it in. We use the IPv4 literal (not "localhost") because Ollama binds only to
+/// 127.0.0.1 and "localhost" can resolve to IPv6 ::1, which Ollama refuses.
 fn resolve_base_url(provider: &str, configured: Option<String>) -> Option<String> {
     match (provider, configured) {
-        ("ollama", None) => Some("http://localhost:11434".to_string()),
-        ("ollama", Some(s)) if s.trim().is_empty() => Some("http://localhost:11434".to_string()),
+        ("ollama", None) => Some("http://127.0.0.1:11434".to_string()),
+        ("ollama", Some(s)) if s.trim().is_empty() => Some("http://127.0.0.1:11434".to_string()),
         (_, other) => other,
     }
 }
@@ -2609,32 +3038,38 @@ pub async fn pick_runbook(
     let engine =
         crate::runbook::engine::Engine::new(None).with_user_runbooks(&state.user_runbooks_dir);
     let books = engine.list_runbooks();
-    let needle = symptom.to_lowercase();
 
-    // Heuristic: substring match against `symptoms` and `description`.
-    let mut best: Option<(i32, &crate::runbook::Runbook)> = None;
-    for rb in &books {
-        let mut score = 0i32;
-        for s in &rb.symptoms {
-            if needle.contains(&s.to_lowercase()) || s.to_lowercase().contains(&needle) {
-                score += 5;
+    // Deterministic token-overlap match first (same matcher that powers the
+    // AV "Diagnose with…" suggestions). This handles clear natural-language
+    // symptoms like "I'm getting Dante audio dropouts" offline and instantly,
+    // weighting declared symptoms / tags over name over description.
+    let query = runbook_tokens(&symptom);
+    if !query.is_empty() {
+        let mut best: Option<(i32, i32, &crate::runbook::Runbook)> = None;
+        for rb in &books {
+            let (score, strong) = score_runbook(rb, &query);
+            if score < 6 || strong < 2 {
+                continue;
+            }
+            let replace = match best {
+                None => true,
+                Some((bs, bst, brb)) => {
+                    score > bs
+                        || (score == bs && strong > bst)
+                        || (score == bs && strong == bst && rb.id < brb.id)
+                }
+            };
+            if replace {
+                best = Some((score, strong, rb));
             }
         }
-        if rb.description.to_lowercase().contains(&needle) {
-            score += 2;
+        if let Some((_, _, rb)) = best {
+            return Ok(Some(summarise(rb)));
         }
-        if rb.name.to_lowercase().contains(&needle) {
-            score += 3;
-        }
-        if score > 0 && best.map(|(s, _)| score > s).unwrap_or(true) {
-            best = Some((score, rb));
-        }
-    }
-    if let Some((_, rb)) = best {
-        return Ok(Some(summarise(rb)));
     }
 
-    // LLM fallback (best-effort).
+    // LLM fallback (best-effort) — lets the model interpret looser or more
+    // ambiguous descriptions the deterministic matcher couldn't place.
     let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
     let provider = settings.llm_provider.as_deref().unwrap_or("ollama");
     let key = match resolve_api_key(provider, settings.llm_api_key.clone()) {
@@ -2673,6 +3108,111 @@ pub async fn pick_runbook(
         .map(|rb| summarise(rb)))
 }
 
+/// Tokenise free-form text into a set of lowercase, de-noised words for
+/// overlap scoring. Drops punctuation, short tokens, and a small list of
+/// generic stop-words so the score reflects domain terms (igmp, querier,
+/// dante, ptp, …) rather than filler.
+fn runbook_tokens(text: &str) -> std::collections::HashSet<String> {
+    const STOP: &[&str] = &[
+        "the", "and", "for", "are", "not", "with", "this", "that", "your", "from", "was", "will",
+        "any", "all", "can", "has", "have", "but", "you", "its", "per", "via", "out", "see", "run",
+        "one", "two", "other", "into", "than", "then", "they", "them", "their", "there", "here",
+        "when", "what", "which", "while", "after", "before", "over", "under", "some", "most", "more",
+        "less", "each", "both", "also", "only", "like", "such", "very", "still", "likely", "cannot",
+        "does", "did", "had", "his", "her", "our", "off", "yet", "may", "might", "must", "should",
+        "would", "could", "about", "between", "during", "because", "another", "across",
+    ];
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.len() >= 3 && !STOP.contains(t))
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// Score how well a runbook matches a symptom token set. Weights domain
+/// signals highest: declared symptoms and `applies_to`/category tags (3),
+/// then the runbook name (2), then the description (1). Returns the total
+/// score and how many *distinct* strong (weight ≥ 2) tokens matched — the
+/// caller uses both to decide whether a match is confident enough to show.
+fn score_runbook(rb: &crate::runbook::Runbook, query: &std::collections::HashSet<String>) -> (i32, i32) {
+    let symptom_tokens: std::collections::HashSet<String> =
+        rb.symptoms.iter().flat_map(|s| runbook_tokens(s)).collect();
+    let tag_tokens: std::collections::HashSet<String> = rb
+        .applies_to
+        .iter()
+        .chain(std::iter::once(&rb.category))
+        .flat_map(|s| runbook_tokens(s))
+        .collect();
+    let name_tokens = runbook_tokens(&rb.name);
+    let desc_tokens = runbook_tokens(&rb.description);
+
+    let mut score = 0i32;
+    let mut strong = 0i32;
+    for tok in query {
+        let w = if symptom_tokens.contains(tok) || tag_tokens.contains(tok) {
+            3
+        } else if name_tokens.contains(tok) {
+            2
+        } else if desc_tokens.contains(tok) {
+            1
+        } else {
+            0
+        };
+        score += w;
+        if w >= 2 {
+            strong += 1;
+        }
+    }
+    (score, strong)
+}
+
+/// Deterministic, LLM-free runbook suggestion for a batch of free-form
+/// symptom strings (e.g. the AV diagnostics warnings). Returns, aligned to
+/// the input order, the single best-matching runbook for each symptom — or
+/// `None` when nothing clears the confidence bar (score ≥ 6 with at least
+/// two distinct strong-token matches). This powers the one-click
+/// "Diagnose with <runbook>" affordance without a model round-trip.
+#[tauri::command]
+pub async fn suggest_runbooks(
+    state: State<'_, AppState>,
+    symptoms: Vec<String>,
+) -> Result<Vec<Option<RunbookSummary>>, String> {
+    let engine =
+        crate::runbook::engine::Engine::new(None).with_user_runbooks(&state.user_runbooks_dir);
+    let books = engine.list_runbooks();
+
+    let suggestions = symptoms
+        .iter()
+        .map(|symptom| {
+            let query = runbook_tokens(symptom);
+            if query.is_empty() {
+                return None;
+            }
+            let mut best: Option<(i32, i32, &crate::runbook::Runbook)> = None;
+            for rb in &books {
+                let (score, strong) = score_runbook(rb, &query);
+                if score < 6 || strong < 2 {
+                    continue;
+                }
+                let replace = match best {
+                    None => true,
+                    Some((bs, bst, brb)) => {
+                        score > bs
+                            || (score == bs && strong > bst)
+                            || (score == bs && strong == bst && rb.id < brb.id)
+                    }
+                };
+                if replace {
+                    best = Some((score, strong, rb));
+                }
+            }
+            best.map(|(_, _, rb)| summarise(rb))
+        })
+        .collect();
+
+    Ok(suggestions)
+}
+
 /// Execute a runbook end-to-end. Emits `runbook-event` events through the
 /// app handle for live transcript rendering; returns the full execution
 /// when complete.
@@ -2705,7 +3245,15 @@ pub async fn run_runbook(
         Err(_) => None,
     };
 
-    let pinned = resolved_iface(&state, iface.as_deref());
+    // Runbook probes that pin to a NIC (PTP / IGMP / SAP / DSCP /
+    // multicast / link audit) need a concrete interface name — unlike the
+    // scan collectors, they can't fall back to the kernel's per-probe
+    // routing. So when the NIC is "auto" (no explicit arg and no pinned
+    // setting), resolve a sensible default interface here rather than
+    // leaving `pinned_iface = None`, which made every iface-pinned step
+    // fail with "no NIC pinned".
+    let pinned = resolved_iface(&state, iface.as_deref())
+        .or_else(crate::probes::iface::default_interface);
     let inputs = crate::runbook::engine::ExecutionInputs {
         pinned_iface: pinned,
         variables: std::collections::BTreeMap::new(),

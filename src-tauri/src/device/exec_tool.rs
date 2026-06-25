@@ -132,10 +132,11 @@ impl Tool for DeviceExecTool {
 
         if host_id.is_empty() {
             // `host.av_switch` resolved to null because no inventory entry
-            // has that role. Surface as `not_implemented` so the YAML's
-            // `note_if "... is not null"` guard quietly skips.
+            // has that role. Surface as `skipped` so runbooks can
+            // distinguish this from transport/tool availability issues.
             return Ok(json!({
-                "verdict": "not_implemented",
+                "verdict": "skipped",
+                "reason": "missing_host_role",
                 "host": null,
                 "cmd": cmd_id,
                 "note": "No inventory host matches the requested role; switch-side check skipped.",
@@ -214,7 +215,12 @@ impl Tool for DeviceExecTool {
             approval_token_runtime = approval::verdict_audit_token(verdict).to_string();
             if verdict != Verdict::Approve {
                 return Ok(json!({
-                    "verdict": "not_implemented",
+                    "verdict": "denied",
+                    "reason": match verdict {
+                        Verdict::Deny => "operator_denied",
+                        Verdict::Timeout => "approval_timeout",
+                        Verdict::Approve => "approved",
+                    },
                     "host": host.id,
                     "cmd": cmd.id,
                     "approval": approval_token_runtime,

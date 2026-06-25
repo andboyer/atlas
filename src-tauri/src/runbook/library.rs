@@ -17,6 +17,10 @@ use tracing::warn;
 /// for error messages — the authoritative id is the `id:` field inside.
 const BUNDLED: &[(&str, &str)] = &[
     (
+        "cisco-port-soft-recovery",
+        include_str!("../../../assets/runbooks/cisco-port-soft-recovery.yaml"),
+    ),
+    (
         "dante-audio-dropouts",
         include_str!("../../../assets/runbooks/dante-audio-dropouts.yaml"),
     ),

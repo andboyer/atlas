@@ -6,9 +6,7 @@
 //!
 //! Implementation: a process-global `ApprovalCenter` keyed by `(run_id,
 //! request_id)`. The Tauri command `approve_runbook_step` looks the pair
-//! up and fulfils the oneshot. v1 ships zero non-Read commands enabled,
-//! so this whole surface is exercised by unit tests but never blocks a
-//! shipped runbook.
+//! up and fulfils the oneshot.
 
 use parking_lot::Mutex;
 use std::collections::HashMap;

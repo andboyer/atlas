@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   Search,
+  Sparkles,
 } from "lucide-react";
 import { useApp } from "../store";
 
@@ -33,6 +34,8 @@ type StepStatus =
   | "warn"
   | "failed"
   | "skipped"
+  | "denied"
+  | "unavailable"
   | "error"
   | "not_implemented";
 
@@ -67,12 +70,12 @@ interface RunbookExecution {
 type RunbookEvent =
   | { kind: "started"; run_id: string; runbook_id: string; runbook_name: string }
   | { kind: "step_started"; run_id: string; step_id: string; tool: string }
-  | { kind: "step_finished"; run_id: string; step: StepRecord }
+  | { kind: "step_finished"; run_id: string; record: StepRecord }
   | {
       kind: "nested_runbook_started";
       run_id: string;
-      parent_run_id: string;
-      runbook_id: string;
+      parent_step_id: string;
+      child_runbook_id: string;
     }
   | { kind: "narration"; run_id: string; text: string }
   | { kind: "completed"; run_id: string; outcome: ExecutionOutcome }
@@ -105,6 +108,16 @@ const STATUS_META: Record<
     label: "Skipped",
     tone: "bg-slate-500/15 text-slate-300 border-slate-500/30",
     icon: <ChevronRight className="h-3.5 w-3.5" />,
+  },
+  denied: {
+    label: "Denied",
+    tone: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+    icon: <XCircle className="h-3.5 w-3.5" />,
+  },
+  unavailable: {
+    label: "Unavailable",
+    tone: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+    icon: <Clock className="h-3.5 w-3.5" />,
   },
   error: {
     label: "Engine error",
@@ -145,7 +158,10 @@ function StatusPill({ status }: { status: StepStatus }) {
 
 function StepCard({ step }: { step: StepRecord }) {
   const [open, setOpen] = useState(
-    step.status === "warn" || step.status === "failed" || step.status === "error",
+    step.status === "warn" ||
+      step.status === "failed" ||
+      step.status === "denied" ||
+      step.status === "error",
   );
   const pretty = useMemo(() => {
     try {
@@ -252,6 +268,8 @@ export function RunbooksPanel() {
     (s) => s.settings?.preferred_interface ?? "",
   );
   const nic = preferredInterface.trim() || null;
+  const pendingRunbookId = useApp((s) => s.pendingRunbookId);
+  const clearPendingRunbook = useApp((s) => s.clearPendingRunbook);
   const [runbooks, setRunbooks] = useState<RunbookSummary[]>([]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -262,6 +280,14 @@ export function RunbooksPanel() {
   const [liveRunbookName, setLiveRunbookName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeRunId = useRef<string | null>(null);
+
+  // Natural-language diagnosis state.
+  const [nlQuery, setNlQuery] = useState("");
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [aiPick, setAiPick] = useState<{
+    summary: RunbookSummary | null;
+    symptom: string;
+  } | null>(null);
 
   // Load catalog once.
   useEffect(() => {
@@ -276,6 +302,14 @@ export function RunbooksPanel() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Pre-select a runbook requested from another panel (AV "Diagnose with…").
+  useEffect(() => {
+    if (pendingRunbookId) {
+      setSelected(pendingRunbookId);
+      clearPendingRunbook();
+    }
+  }, [pendingRunbookId, clearPendingRunbook]);
 
   // Subscribe to runbook events for live transcript.
   useEffect(() => {
@@ -295,7 +329,7 @@ export function RunbooksPanel() {
             setLiveRunbookName(payload.runbook_name);
             break;
           case "step_finished":
-            setLiveSteps((prev) => [...prev, payload.step]);
+            setLiveSteps((prev) => [...prev, payload.record]);
             break;
           case "narration":
             setLiveNarration(payload.text);
@@ -342,17 +376,20 @@ export function RunbooksPanel() {
 
   const selectedSummary = runbooks.find((rb) => rb.id === selected);
 
-  const runSelected = async () => {
-    if (!selected) return;
+  const runSelected = async (runbookId?: string) => {
+    const id = runbookId ?? selected;
+    if (!id) return;
+    setSelected(id);
     setRunning(true);
     setError(null);
     setExecution(null);
     setLiveSteps([]);
     setLiveNarration(null);
-    setLiveRunbookName(selectedSummary?.name ?? null);
+    const name = runbooks.find((rb) => rb.id === id)?.name ?? null;
+    setLiveRunbookName(name);
     try {
       const result = await invoke<RunbookExecution>("run_runbook", {
-        runbookId: selected,
+        runbookId: id,
         iface: nic ?? null,
       });
       setExecution(result);
@@ -362,6 +399,34 @@ export function RunbooksPanel() {
       setError(String(e));
     } finally {
       setRunning(false);
+    }
+  };
+
+  // ── Natural-language diagnosis ────────────────────────────────────────
+  // The user describes a problem in plain English ("I'm getting Dante audio
+  // dropouts") and `pick_runbook` resolves it to the best-matching runbook
+  // (deterministic token match, with an LLM fallback for looser phrasing).
+  // We then run that runbook automatically.
+  const runDiagnosis = async () => {
+    const symptom = nlQuery.trim();
+    if (!symptom || diagnosing || running) return;
+    setDiagnosing(true);
+    setError(null);
+    setAiPick(null);
+    try {
+      const match = await invoke<RunbookSummary | null>("pick_runbook", {
+        symptom,
+      });
+      if (!match) {
+        setAiPick({ summary: null, symptom });
+        return;
+      }
+      setAiPick({ summary: match, symptom });
+      await runSelected(match.id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDiagnosing(false);
     }
   };
 
@@ -389,13 +454,71 @@ export function RunbooksPanel() {
             <button
               type="button"
               disabled={!selected || running}
-              onClick={runSelected}
+              onClick={() => runSelected()}
               className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-b from-[var(--color-accent)] to-[#b8893f] px-3.5 py-2 text-sm font-semibold text-[var(--atlas-navy,#0B1F3A)] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_14px_-8px_rgba(212,162,76,0.6)] transition-opacity hover:opacity-95 disabled:opacity-50"
             >
               <Play className={`h-4 w-4 ${running ? "animate-pulse" : ""}`} />
               {running ? "Running…" : "Run runbook"}
             </button>
           </div>
+        </div>
+
+        {/* Natural-language diagnosis — describe the problem, AI picks and
+            runs the right runbook automatically. */}
+        <div className="rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 p-4">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-accent)]">
+            <Sparkles className="h-3.5 w-3.5" /> Describe the problem
+          </div>
+          <p className="mt-1 text-xs text-[var(--color-muted)]">
+            Tell Atlas what you're seeing in plain English — it picks the right
+            runbook and runs the troubleshooting steps automatically.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <input
+              type="text"
+              value={nlQuery}
+              onChange={(e) => setNlQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void runDiagnosis();
+              }}
+              disabled={diagnosing || running}
+              placeholder="e.g. I'm experiencing Dante audio dropouts"
+              className="flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+            />
+            <button
+              type="button"
+              disabled={!nlQuery.trim() || diagnosing || running}
+              onClick={() => void runDiagnosis()}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-b from-[var(--color-accent)] to-[#b8893f] px-4 py-2 text-sm font-semibold text-[var(--atlas-navy,#0B1F3A)] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_14px_-8px_rgba(212,162,76,0.6)] transition-opacity hover:opacity-95 disabled:opacity-50"
+            >
+              <Sparkles className={`h-4 w-4 ${diagnosing ? "animate-pulse" : ""}`} />
+              {diagnosing ? "Diagnosing…" : "Diagnose & run"}
+            </button>
+          </div>
+          {aiPick && (
+            <div className="mt-3 text-xs">
+              {aiPick.summary ? (
+                <div className="flex items-start gap-2 text-[var(--color-muted)]">
+                  <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-accent)]" />
+                  <span>
+                    Matched{" "}
+                    <span className="font-semibold text-[var(--color-fg)]">
+                      {aiPick.summary.name}
+                    </span>{" "}
+                    — {aiPick.summary.description}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 text-amber-300">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    No runbook confidently matched “{aiPick.symptom}”. Try
+                    rephrasing, or pick one from the list below.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {error && (

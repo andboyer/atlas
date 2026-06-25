@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
   AlertTriangle,
@@ -9,6 +10,7 @@ import {
   Radio,
   RefreshCw,
   Signal,
+  Stethoscope,
   Wifi,
   Zap,
 } from "lucide-react";
@@ -23,6 +25,7 @@ import type {
   LldpProbeResult,
   MulticastGroup,
   PtpProbeResult,
+  RunbookSummary,
   SapProbeResult,
 } from "../types";
 
@@ -135,22 +138,58 @@ export function AvDiagnostics() {
 // ────────────────────────────────────────────────────────────────────────
 
 function WarningStrip({ warnings }: { warnings: AvWarning[] }) {
-  // Sort critical → warn → info.
-  const order = (s: string) =>
-    s === "critical" ? 0 : s === "warn" ? 1 : 2;
-  const sorted = [...warnings].sort(
-    (a, b) => order(a.severity) - order(b.severity),
-  );
+  const openRunbook = useApp((s) => s.openRunbook);
+  const [suggestions, setSuggestions] = useState<(RunbookSummary | null)[]>([]);
+
+  // Ask the backend (deterministic, no LLM) which runbook best matches each
+  // warning so we can offer a one-click "Diagnose" jump into the Runbooks tab.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const symptoms = warnings.map((w) => `${w.category}: ${w.message}`);
+        const res = await invoke<(RunbookSummary | null)[]>(
+          "suggest_runbooks",
+          { symptoms },
+        );
+        if (!cancelled) setSuggestions(res);
+      } catch {
+        if (!cancelled) setSuggestions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [warnings]);
+
+  // Sort critical → warn → info, keeping each warning paired with its match.
+  const order = (s: string) => (s === "critical" ? 0 : s === "warn" ? 1 : 2);
+  const rows = warnings
+    .map((warning, i) => ({ warning, suggestion: suggestions[i] ?? null }))
+    .sort((a, b) => order(a.warning.severity) - order(b.warning.severity));
   return (
     <div className="space-y-2">
-      {sorted.map((w, i) => (
-        <WarningRow key={i} warning={w} />
+      {rows.map(({ warning, suggestion }, i) => (
+        <WarningRow
+          key={i}
+          warning={warning}
+          suggestion={suggestion}
+          onDiagnose={openRunbook}
+        />
       ))}
     </div>
   );
 }
 
-function WarningRow({ warning }: { warning: AvWarning }) {
+function WarningRow({
+  warning,
+  suggestion,
+  onDiagnose,
+}: {
+  warning: AvWarning;
+  suggestion: RunbookSummary | null;
+  onDiagnose: (id: string) => void;
+}) {
   const tone =
     warning.severity === "critical"
       ? "border-rose-500/40 bg-rose-500/10 text-rose-200"
@@ -167,6 +206,17 @@ function WarningRow({ warning }: { warning: AvWarning }) {
           {warning.severity} · {warning.category}
         </div>
         <p className="mt-0.5 leading-relaxed">{warning.message}</p>
+        {suggestion && (
+          <button
+            type="button"
+            onClick={() => onDiagnose(suggestion.id)}
+            title={suggestion.description}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-current/40 bg-black/10 px-2.5 py-1 text-[11px] font-semibold transition-opacity hover:opacity-80"
+          >
+            <Stethoscope className="h-3.5 w-3.5" />
+            Diagnose with “{suggestion.name}”
+          </button>
+        )}
       </div>
     </div>
   );

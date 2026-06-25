@@ -9,14 +9,9 @@
  */
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { MessageCircle, ChevronDown, ChevronUp, Send, Eye, X, Loader2 } from "lucide-react";
+import { MessageCircle, ChevronDown, ChevronUp, Send, Eye, X, Loader2, Trash2, Terminal } from "lucide-react";
 import { useApp } from "../store";
 import type { ScanResult } from "../types";
-
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-}
 
 interface Props {
   scanResult: ScanResult;
@@ -24,11 +19,16 @@ interface Props {
 
 export default function ChatPanel({ scanResult }: Props) {
   const settings = useApp((s) => s.settings);
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Chat session lives in the global store so it survives navigating away
+  // from this panel and persists until the app is closed.
+  const open = useApp((s) => s.chatOpen);
+  const setOpen = useApp((s) => s.setChatOpen);
+  const messages = useApp((s) => s.chatMessages);
+  const input = useApp((s) => s.chatInput);
+  const setInput = useApp((s) => s.setChatInput);
+  const loading = useApp((s) => s.chatLoading);
+  const sendChat = useApp((s) => s.sendChat);
+  const clearChat = useApp((s) => s.clearChat);
   const [previewText, setPreviewText] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -48,26 +48,11 @@ export default function ChatPanel({ scanResult }: Props) {
   async function handleSend() {
     const question = input.trim();
     if (!question || loading) return;
-
-    const newMessages: Message[] = [...messages, { role: "user", content: question }];
-    setMessages(newMessages);
-    setInput("");
-    setError(null);
-    setLoading(true);
-
-    try {
-      const answer = await invoke<string>("chat_query", {
-        scanResult,
-        history: messages, // history before the new question
-        question,
-      });
-      setMessages([...newMessages, { role: "assistant", content: answer }]);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-      inputRef.current?.focus();
-    }
+    // Fire-and-forget into the store: the request keeps running even if this
+    // panel unmounts (e.g. the user switches tabs), and the answer still lands
+    // in the persisted chat history.
+    await sendChat(scanResult, question);
+    inputRef.current?.focus();
   }
 
   async function handlePreview() {
@@ -94,7 +79,7 @@ export default function ChatPanel({ scanResult }: Props) {
       {/* Header / toggle */}
       <button
         className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(!open)}
       >
         <span className="flex items-center gap-2 font-semibold text-sm text-gray-700 dark:text-gray-200">
           <MessageCircle className="w-4 h-4 text-indigo-500" />
@@ -122,6 +107,19 @@ export default function ChatPanel({ scanResult }: Props) {
             <>
               {/* Message list */}
               <div className="flex flex-col gap-3 px-4 py-3 max-h-72 overflow-y-auto">
+                {messages.length > 0 && (
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => clearChat()}
+                      disabled={loading}
+                      className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      title="Clear conversation"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Clear
+                    </button>
+                  </div>
+                )}
                 {messages.length === 0 && (
                   <p className="text-xs text-gray-400 dark:text-gray-500 italic text-center py-2">
                     Ask a question about the scan results above — e.g.{" "}
@@ -130,6 +128,14 @@ export default function ChatPanel({ scanResult }: Props) {
                   </p>
                 )}
                 {messages.map((m, i) => (
+                  m.step ? (
+                    <div key={i} className="flex justify-center">
+                      <div className="flex items-center gap-1.5 text-[11px] text-gray-400 dark:text-gray-500 italic px-2 py-0.5">
+                        <Terminal className="w-3 h-3" />
+                        <span>{m.content}</span>
+                      </div>
+                    </div>
+                  ) : (
                   <div
                     key={i}
                     className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
@@ -138,12 +144,15 @@ export default function ChatPanel({ scanResult }: Props) {
                       className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed ${
                         m.role === "user"
                           ? "bg-indigo-500 text-white rounded-br-sm"
-                          : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-bl-sm"
+                          : m.isError
+                            ? "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-bl-sm"
+                            : "bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-bl-sm"
                       }`}
                     >
                       {m.content}
                     </div>
                   </div>
+                  )
                 ))}
                 {loading && (
                   <div className="flex justify-start">
@@ -152,9 +161,6 @@ export default function ChatPanel({ scanResult }: Props) {
                       <span className="text-xs text-gray-400">Thinking…</span>
                     </div>
                   </div>
-                )}
-                {error && (
-                  <div className="text-xs text-red-500 px-1">{error}</div>
                 )}
                 <div ref={bottomRef} />
               </div>

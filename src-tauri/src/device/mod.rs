@@ -1,6 +1,6 @@
 //! Device transport, host inventory, skill packs, and audit log.
 //!
-//! This module is the Phase 2-6 surface from `docs/AGENTIC_PLAN.md`:
+//! This module is the Phase 2-6 surface from `docs/PLAN.md`:
 //!
 //!  * **Host inventory** (`inventory.rs`) — TOML-on-disk catalogue of
 //!    switches and controllers the operator wants the runbook engine to
@@ -23,9 +23,7 @@
 //!    from Settings → "Agent audit log".
 //!  * **Approval gates** (`approval.rs`) — runbook execution pauses on a
 //!    `mutate` or `dangerous` command and emits a `RunbookEvent` to the
-//!    frontend; only the operator can resolve the wait. v1 packs have
-//!    zero non-`read` commands enabled, so the approval surface is wired
-//!    end-to-end but never trips in shipped books.
+//!    frontend; only the operator can resolve the wait.
 //!  * **`device.exec`** (`exec_tool.rs`) — the single allowlisted runbook
 //!    tool that bridges the engine to the inventory + pack + transport
 //!    pipeline. YAML runbooks invoke it as
@@ -47,7 +45,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Risk tier for every command in every skill pack. v1 shipped packs are
-/// 100% `Read`; the engine refuses to execute anything higher without an
+/// mostly `Read`; the engine refuses to execute anything higher without an
 /// explicit `Approve` event from the operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

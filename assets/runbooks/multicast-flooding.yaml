@@ -25,7 +25,7 @@ steps:
     tool: local.igmp_listen
     args: { iface: "{nic}", duration_s: 35 }
     bind: igmp
-    note_if: igmp.verdict == 'not_implemented'
-    note_msg: "IGMP listener is not yet shipped — check IGMP snooping state from the switch CLI: `show ip igmp snooping` (Cisco) and confirm it is enabled on the AV VLAN with a querier IP listed."
+    note_if: igmp.verdict == 'unavailable' || igmp.verdict == 'not_implemented'
+    note_msg: "The privileged IGMP listener needs administrator authorization and it was declined or unavailable on this run, so snooping state wasn't read on-wire. Re-run and approve the admin prompt, or check from the switch CLI: `show ip igmp snooping` (Cisco) and confirm it is enabled on the AV VLAN with a querier IP listed."
     warn_if: igmp.verdict == 'no_querier_observed'
     warn_msg: "No IGMP querier observed — without one, snooping silently disables itself and multicast is flooded everywhere."

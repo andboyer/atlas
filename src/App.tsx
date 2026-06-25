@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   LayoutDashboard,
   Network,
   Radio,
   Cpu,
   History,
-  MessageSquare,
   Download,
   Settings as SettingsIcon,
   Wrench,
@@ -14,6 +14,7 @@ import {
   Waves,
   Stethoscope,
   Server,
+  ScanSearch,
 } from "lucide-react";
 import { StatusCard } from "./components/StatusCard";
 import { KpiRow } from "./components/KpiRow";
@@ -27,7 +28,7 @@ import { ServiceStatus } from "./components/ServiceStatus";
 import { SettingsPanel } from "./components/SettingsPanel";
 import ChannelMap from "./components/ChannelMap";
 import { NearbyApTable } from "./components/NearbyApTable";
-import ChatPanel from "./components/ChatPanel";
+import AssistantDock from "./components/AssistantDock";
 import { AiExplanation } from "./components/AiExplanation";
 import { RadioInsights } from "./components/RadioInsights";
 import { AvDiagnostics } from "./components/AvDiagnostics";
@@ -54,20 +55,75 @@ import AuditLogPanel from "./components/AuditLogPanel";
 import SkillPackBrowser from "./components/SkillPackBrowser";
 import RunbookEditor from "./components/RunbookEditor";
 import ApprovalModal from "./components/ApprovalModal";
+import IpScannerPanel from "./components/IpScannerPanel";
 import { useApp } from "./store";
 
-type TabId =
-  | "overview"
-  | "alerts"
-  | "network"
-  | "airspace"
-  | "av"
-  | "runbooks"
-  | "fleet"
-  | "devices"
-  | "activity"
-  | "tools"
-  | "assistant";
+/** Top-level workspace groups. Each bundles related panels under a sub-nav so
+ *  the surface is ~5 destinations instead of a 12-tab strip. */
+type GroupId = "home" | "wifi" | "network" | "avfleet" | "activity";
+
+/** Legacy single-tab ids still used by cross-panel navigation requests
+ *  (store.requestedTab). Mapped onto the new (group, sub) structure. */
+const LEGACY_TAB_MAP: Record<string, { group: GroupId; sub: string }> = {
+  overview: { group: "home", sub: "summary" },
+  alerts: { group: "home", sub: "findings" },
+  network: { group: "network", sub: "health" },
+  airspace: { group: "wifi", sub: "airspace" },
+  av: { group: "avfleet", sub: "av" },
+  runbooks: { group: "avfleet", sub: "runbooks" },
+  fleet: { group: "avfleet", sub: "fleet" },
+  devices: { group: "network", sub: "devices" },
+  scanner: { group: "network", sub: "scanner" },
+  activity: { group: "activity", sub: "timeline" },
+  tools: { group: "activity", sub: "tools" },
+  assistant: { group: "home", sub: "summary" },
+};
+
+/** Default sub-tab for each group, used when first entering it. */
+const DEFAULT_SUB: Record<GroupId, string> = {
+  home: "summary",
+  wifi: "airspace",
+  network: "health",
+  avfleet: "av",
+  activity: "timeline",
+};
+
+function SubNav({
+  items,
+  active,
+  onChange,
+}: {
+  items: { id: string; label: string; badge?: number }[];
+  active: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-1">
+      {items.map((it) => {
+        const on = it.id === active;
+        return (
+          <button
+            key={it.id}
+            onClick={() => onChange(it.id)}
+            className={[
+              "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+              on
+                ? "bg-[var(--color-panel-2)] text-[var(--color-text)]"
+                : "text-[var(--color-muted)] hover:text-[var(--color-text)]",
+            ].join(" ")}
+          >
+            {it.label}
+            {typeof it.badge === "number" && it.badge > 0 && (
+              <span className="ml-1.5 rounded-full bg-[var(--color-accent)]/20 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-accent)]">
+                {it.badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function SectionHeading({
   children,
@@ -111,8 +167,58 @@ function App() {
   const devicesCount = useApp((s) => s.lastScan?.devices?.length ?? 0);
 
   const [showSettings, setShowSettings] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const [activeGroup, setActiveGroup] = useState<GroupId>("home");
+  // Remember the last sub-tab visited within each group so switching groups
+  // and coming back restores where you were.
+  const [subByGroup, setSubByGroup] = useState<Record<GroupId, string>>(DEFAULT_SUB);
+  const activeSub = subByGroup[activeGroup];
+  const dockCollapsed = useApp((s) => s.assistantDockCollapsed);
   const [exporting, setExporting] = useState(false);
+
+  const navigate = (group: GroupId, sub?: string) => {
+    setActiveGroup(group);
+    if (sub) setSubByGroup((prev) => ({ ...prev, [group]: sub }));
+  };
+  const setActiveSub = (sub: string) =>
+    setSubByGroup((prev) => ({ ...prev, [activeGroup]: sub }));
+
+  // Cross-tab navigation: other panels (e.g. AV "Diagnose with…") request a
+  // tab switch via the store. Apply it here, then clear the request.
+  const requestedTab = useApp((s) => s.requestedTab);
+  const clearRequestedTab = useApp((s) => s.clearRequestedTab);
+  useEffect(() => {
+    if (requestedTab) {
+      const mapped = LEGACY_TAB_MAP[requestedTab];
+      if (mapped) navigate(mapped.group, mapped.sub);
+      clearRequestedTab();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedTab, clearRequestedTab]);
+
+  // Surface chat-agent device tool calls as transient transcript steps.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{
+      tool?: string;
+      host?: string | null;
+      cmd?: string | null;
+      result?: { error?: string; verdict?: string } | null;
+    }>("chat-agent-step", (ev) => {
+      const { host, cmd, result } = ev.payload ?? {};
+      let line: string;
+      if (result?.error) {
+        line = `device ${cmd ?? "exec"} on ${host ?? "?"} failed: ${result.error}`;
+      } else if (result?.verdict && result.verdict !== "ok") {
+        line = `device ${cmd ?? "exec"} on ${host ?? "?"} → ${result.verdict}`;
+      } else {
+        line = `Ran ${cmd ?? "command"} on ${host ?? "device"}`;
+      }
+      useApp.getState().appendChatStep(line);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
 
   useEffect(() => {
     loadSettings();
@@ -186,71 +292,74 @@ function App() {
     }
   };
 
-  const tabs = [
+  // Primary navigation: five groups, each with its own sub-tabs. Badges
+  // surface live counts on the group and the relevant sub.
+  const NAV: {
+    id: GroupId;
+    label: string;
+    icon: React.ReactNode;
+    badge?: number;
+    subs: { id: string; label: string; badge?: number }[];
+  }[] = [
     {
-      id: "overview",
+      id: "home",
       label: "Overview",
       icon: <LayoutDashboard className="h-4 w-4" />,
+      badge: findingsCount,
+      subs: [
+        { id: "summary", label: "Summary" },
+        { id: "findings", label: "Findings", badge: findingsCount },
+      ],
     },
     {
-      id: "alerts",
-      label: "Alerts",
-      icon: <Bell className="h-4 w-4" />,
-      badge: findingsCount,
+      id: "wifi",
+      label: "Wi-Fi",
+      icon: <Radio className="h-4 w-4" />,
+      subs: [
+        { id: "airspace", label: "Airspace" },
+        { id: "link", label: "Link & radio" },
+      ],
     },
     {
       id: "network",
       label: "Network",
       icon: <Network className="h-4 w-4" />,
-    },
-    {
-      id: "airspace",
-      label: "Airspace",
-      icon: <Radio className="h-4 w-4" />,
-    },
-    {
-      id: "av",
-      label: "AV / Multicast",
-      icon: <Waves className="h-4 w-4" />,
-    },
-    {
-      id: "runbooks",
-      label: "Runbooks",
-      icon: <Stethoscope className="h-4 w-4" />,
-    },
-    {
-      id: "fleet",
-      label: "Fleet",
-      icon: <Server className="h-4 w-4" />,
-    },
-    {
-      id: "devices",
-      label: "Devices",
-      icon: <Cpu className="h-4 w-4" />,
       badge: devicesCount,
+      subs: [
+        { id: "health", label: "Path & WAN" },
+        { id: "devices", label: "Devices", badge: devicesCount },
+        { id: "scanner", label: "IP Scanner" },
+      ],
+    },
+    {
+      id: "avfleet",
+      label: "AV & Fleet",
+      icon: <Waves className="h-4 w-4" />,
+      subs: [
+        { id: "av", label: "AV / Multicast" },
+        { id: "runbooks", label: "Runbooks" },
+        { id: "fleet", label: "Fleet" },
+      ],
     },
     {
       id: "activity",
       label: "Activity",
       icon: <History className="h-4 w-4" />,
-    },
-    {
-      id: "tools",
-      label: "Tools",
-      icon: <Wrench className="h-4 w-4" />,
-    },
-    {
-      id: "assistant",
-      label: "Assistant",
-      icon: <MessageSquare className="h-4 w-4" />,
+      subs: [
+        { id: "timeline", label: "Timeline" },
+        { id: "history", label: "History" },
+        { id: "tools", label: "Stress tests" },
+      ],
     },
   ];
+
+  const currentGroup = NAV.find((g) => g.id === activeGroup) ?? NAV[0];
 
   return (
     <div className="min-h-screen">
       <UpdateBanner />
       <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-bg)]/85 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-8 py-4">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-8 py-4">
           <div className="flex items-center gap-3">
             <div className="atlas-brand-chip flex h-11 w-11 items-center justify-center rounded-xl">
               <img
@@ -301,164 +410,215 @@ function App() {
         <div className="atlas-hairline" aria-hidden />
       </header>
 
-      <main className="mx-auto max-w-7xl px-8 py-8">
-        {/* === Above-fold: alerts → identity → KPIs → tabs. Keep this short. === */}
-        <div className="space-y-4">
-          {lastScan?.captive_portal && (
-            <div className="flex items-center gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-5 py-3 text-sm text-yellow-200">
-              <span className="text-lg">⚠</span>
-              <div>
-                <strong>Captive portal detected.</strong> Your traffic is being
-                intercepted by a login page (hotel, café, or corporate
-                network). Browse to any http:// page to authenticate.
-              </div>
+      <main className="mx-auto max-w-[1600px] px-6 py-6">
+        <div className="flex gap-6">
+          {/* Left: workspace content */}
+          <div className="min-w-0 flex-1">
+            {/* === Above-fold: alerts → identity → KPIs. Keep this short. === */}
+            <div className="space-y-4">
+              {lastScan?.captive_portal && (
+                <div className="flex items-center gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-5 py-3 text-sm text-yellow-200">
+                  <span className="text-lg">⚠</span>
+                  <div>
+                    <strong>Captive portal detected.</strong> Your traffic is
+                    being intercepted by a login page (hotel, café, or corporate
+                    network). Browse to any http:// page to authenticate.
+                  </div>
+                </div>
+              )}
+
+              <AlternateApBanner />
+              <PermissionsCard />
+              <StatusCard />
+              <KpiRow />
             </div>
-          )}
 
-          <AlternateApBanner />
-          <PermissionsCard />
-          <StatusCard />
-          <KpiRow />
-        </div>
+            {/* === Primary group nav === */}
+            <div className="mt-6">
+              <Tabs
+                tabs={NAV.map((g) => ({
+                  id: g.id,
+                  label: g.label,
+                  icon: g.icon,
+                  badge: g.badge,
+                }))}
+                active={activeGroup}
+                onChange={(id) => navigate(id as GroupId)}
+              />
 
-        {/* === Tabs === */}
-        <div className="mt-6">
-          <Tabs
-            tabs={tabs}
-            active={activeTab}
-            onChange={(id) => setActiveTab(id as TabId)}
-          />
-
-          <div className="mt-6 space-y-6">
-            {activeTab === "overview" && (
-              <>
-                <LiveMetricsChart />
-                <AiExplanation />
-                <RadioInsights />
-                {lastScan && <QualityPanel quality={lastScan.quality} />}
-                <TrendsPanel />
-              </>
-            )}
-
-            {activeTab === "alerts" && (
-              <>
-                <section>
-                  <SectionHeading icon={<Bell className="h-3.5 w-3.5" />}>
-                    Findings &amp; recommendations
-                  </SectionHeading>
-                  <FindingsList />
-                </section>
-                <NarrativePanel />
-              </>
-            )}
-
-            {activeTab === "network" && (
-              <>
-                {lastScan && <LinkDetailsPanel link={lastScan.link} />}
-                {lastScan && (
-                  <NetworkPathPanel
-                    reachability={lastScan.reachability}
-                    mtuBytes={lastScan.mtu_bytes}
-                    dnsLeak={lastScan.dns_leak}
-                    captivePortal={lastScan.captive_portal}
-                  />
-                )}
-                {lastScan && (
-                  <PhyEfficiencyBadge phy={lastScan.phy_efficiency} />
-                )}
-                <WanPanel />
-                <section>
-                  <SectionHeading icon={<Network className="h-3.5 w-3.5" />}>
-                    Service reachability
-                  </SectionHeading>
-                  <ServiceStatus />
-                </section>
-              </>
-            )}
-
-            {activeTab === "airspace" && (
-              <>
-                <section>
-                  <ChannelMap
-                    nearbyAps={lastScan?.nearby_aps ?? []}
-                    ownChannel={lastScan?.link.channel ?? null}
-                    ownBssid={lastScan?.link.bssid ?? null}
-                    interference={lastScan?.interference ?? null}
-                  />
-                </section>
-                <section>
-                  <NearbyApTable
-                    aps={lastScan?.nearby_aps ?? []}
-                    ownBssid={lastScan?.link.bssid ?? null}
-                    ownSsid={lastScan?.link.ssid ?? null}
-                  />
-                </section>
-                {lastScan && <RoamingPanel roaming={lastScan.roaming} />}
-                {lastScan && <RogueApPanel findings={lastScan.rogue_aps} />}
-              </>
-            )}
-
-            {activeTab === "av" && <AvDiagnostics />}
-
-            {activeTab === "runbooks" && <RunbooksPanel />}
-
-            {activeTab === "fleet" && (
-              <div className="space-y-8">
-                <HostInventoryPanel />
-                <SkillPackBrowser />
-                <RunbookEditor />
-                <AuditLogPanel />
+              {/* === Secondary sub-nav for the active group === */}
+              <div className="mt-5">
+                <SubNav
+                  items={currentGroup.subs}
+                  active={activeSub}
+                  onChange={setActiveSub}
+                />
               </div>
-            )}
 
-            {activeTab === "devices" && (
-              <section>
-                <SectionHeading icon={<Cpu className="h-3.5 w-3.5" />}>
-                  Devices on this network
-                </SectionHeading>
-                <DeviceList />
-              </section>
-            )}
+              <div className="space-y-6">
+                {/* ── Overview ─────────────────────────────────────────── */}
+                {activeGroup === "home" && activeSub === "summary" && (
+                  <>
+                    <LiveMetricsChart />
+                    <AiExplanation />
+                    {lastScan && <QualityPanel quality={lastScan.quality} />}
+                    <TrendsPanel />
+                  </>
+                )}
+                {activeGroup === "home" && activeSub === "findings" && (
+                  <>
+                    <section>
+                      <SectionHeading icon={<Bell className="h-3.5 w-3.5" />}>
+                        Findings &amp; recommendations
+                      </SectionHeading>
+                      <FindingsList />
+                    </section>
+                    <NarrativePanel />
+                  </>
+                )}
 
-            {activeTab === "activity" && (
-              <>
-                <section>
-                  <SectionHeading icon={<History className="h-3.5 w-3.5" />}>
-                    Scan history
-                  </SectionHeading>
-                  <IncidentTimeline />
-                </section>
-                <WifiEventsTimeline />
-                <section>
-                  <SectionHeading icon={<History className="h-3.5 w-3.5" />}>
-                    Past scans
-                  </SectionHeading>
-                  <HistoryPanel />
-                </section>
-              </>
-            )}
+                {/* ── Wi-Fi ────────────────────────────────────────────── */}
+                {activeGroup === "wifi" && activeSub === "airspace" && (
+                  <>
+                    <section>
+                      <ChannelMap
+                        nearbyAps={lastScan?.nearby_aps ?? []}
+                        ownChannel={lastScan?.link.channel ?? null}
+                        ownBssid={lastScan?.link.bssid ?? null}
+                        interference={lastScan?.interference ?? null}
+                      />
+                    </section>
+                    <section>
+                      <NearbyApTable
+                        aps={lastScan?.nearby_aps ?? []}
+                        ownBssid={lastScan?.link.bssid ?? null}
+                        ownSsid={lastScan?.link.ssid ?? null}
+                      />
+                    </section>
+                    {lastScan && <RoamingPanel roaming={lastScan.roaming} />}
+                    {lastScan && <RogueApPanel findings={lastScan.rogue_aps} />}
+                  </>
+                )}
+                {activeGroup === "wifi" && activeSub === "link" && (
+                  <>
+                    {lastScan && <LinkDetailsPanel link={lastScan.link} />}
+                    {lastScan && (
+                      <PhyEfficiencyBadge phy={lastScan.phy_efficiency} />
+                    )}
+                    <RadioInsights />
+                  </>
+                )}
 
-            {activeTab === "tools" && (
-              <>
-                <StressTestPanel />
-              </>
-            )}
+                {/* ── Network ──────────────────────────────────────────── */}
+                {activeGroup === "network" && activeSub === "health" && (
+                  <>
+                    {lastScan && (
+                      <NetworkPathPanel
+                        reachability={lastScan.reachability}
+                        mtuBytes={lastScan.mtu_bytes}
+                        dnsLeak={lastScan.dns_leak}
+                        captivePortal={lastScan.captive_portal}
+                      />
+                    )}
+                    <WanPanel />
+                    <section>
+                      <SectionHeading icon={<Network className="h-3.5 w-3.5" />}>
+                        Service reachability
+                      </SectionHeading>
+                      <ServiceStatus />
+                    </section>
+                  </>
+                )}
+                {activeGroup === "network" && activeSub === "devices" && (
+                  <section>
+                    <SectionHeading icon={<Cpu className="h-3.5 w-3.5" />}>
+                      Devices on this network
+                    </SectionHeading>
+                    <DeviceList />
+                  </section>
+                )}
+                {activeGroup === "network" && activeSub === "scanner" && (
+                  <section>
+                    <SectionHeading icon={<ScanSearch className="h-3.5 w-3.5" />}>
+                      IP Scanner
+                    </SectionHeading>
+                    <IpScannerPanel />
+                  </section>
+                )}
 
-            {activeTab === "assistant" && (
-              <section>
-                {lastScan ? (
-                  <ChatPanel scanResult={lastScan} />
-                ) : (
-                  <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 text-sm text-[var(--color-muted)]">
-                    Run a scan to chat with the AI assistant about your network.
+                {/* ── AV & Fleet ───────────────────────────────────────── */}
+                {activeGroup === "avfleet" && activeSub === "av" && (
+                  <AvDiagnostics />
+                )}
+                {activeGroup === "avfleet" && activeSub === "runbooks" && (
+                  <section>
+                    <SectionHeading
+                      icon={<Stethoscope className="h-3.5 w-3.5" />}
+                    >
+                      Runbooks
+                    </SectionHeading>
+                    <RunbooksPanel />
+                  </section>
+                )}
+                {activeGroup === "avfleet" && activeSub === "fleet" && (
+                  <div className="space-y-8">
+                    <section>
+                      <SectionHeading icon={<Server className="h-3.5 w-3.5" />}>
+                        Host inventory
+                      </SectionHeading>
+                      <HostInventoryPanel />
+                    </section>
+                    <SkillPackBrowser />
+                    <RunbookEditor />
+                    <AuditLogPanel />
                   </div>
                 )}
-              </section>
-            )}
-          </div>
-        </div>
 
-        <ScanMetaFooter />
+                {/* ── Activity ─────────────────────────────────────────── */}
+                {activeGroup === "activity" && activeSub === "timeline" && (
+                  <>
+                    <section>
+                      <SectionHeading icon={<History className="h-3.5 w-3.5" />}>
+                        Incident timeline
+                      </SectionHeading>
+                      <IncidentTimeline />
+                    </section>
+                    <WifiEventsTimeline />
+                  </>
+                )}
+                {activeGroup === "activity" && activeSub === "history" && (
+                  <section>
+                    <SectionHeading icon={<History className="h-3.5 w-3.5" />}>
+                      Past scans
+                    </SectionHeading>
+                    <HistoryPanel />
+                  </section>
+                )}
+                {activeGroup === "activity" && activeSub === "tools" && (
+                  <section>
+                    <SectionHeading icon={<Wrench className="h-3.5 w-3.5" />}>
+                      Stress tests
+                    </SectionHeading>
+                    <StressTestPanel />
+                  </section>
+                )}
+              </div>
+            </div>
+
+            <ScanMetaFooter />
+          </div>
+
+          {/* Right: persistent AI dock */}
+          <aside
+            className={`shrink-0 transition-[width] ${
+              dockCollapsed ? "w-12" : "w-[380px]"
+            }`}
+          >
+            <div className="sticky top-[88px] h-[calc(100vh-7rem)]">
+              <AssistantDock />
+            </div>
+          </aside>
+        </div>
       </main>
 
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}

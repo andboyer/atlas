@@ -1,8 +1,7 @@
 # Cisco IOS / IOS-XE skill pack.
 #
-# All commands are Read-risk in v1. The Mutate / Dangerous tier (port
-# bounce, snooping toggle, running-config write) is wired in Phase 6 with
-# approval gating.
+# Most commands are Read-risk. One operator-approved Mutate command is
+# included so approval/audit flow can be exercised end-to-end.
 id = "cisco-ios"
 name = "Cisco IOS / IOS-XE"
 transport = "ssh"
@@ -163,4 +162,15 @@ parser = ""
   [[command.args]]
   name = "ip"
   type = "ipv4"
+  required = true
+
+[[command]]
+id = "clear_interface_counters"
+risk = "mutate"
+template = "clear counters {iface}"
+purpose = "Reset per-interface counters during directed troubleshooting. Requires explicit approval."
+parser = ""
+  [[command.args]]
+  name = "iface"
+  type = "iface_name"
   required = true

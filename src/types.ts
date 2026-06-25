@@ -71,6 +71,27 @@ export type DeviceClass =
   | "router_ap"
   | "unknown";
 
+/** One host found by the active subnet sweep (IP Scanner). */
+export interface IpScanHost {
+  ip: string;
+  mac: string | null;
+  vendor: string | null;
+  hostname: string | null;
+  latency_ms: number | null;
+  online: boolean;
+  /** Open TCP ports discovered on this host, e.g. [22, 80, 443]. */
+  open_ports: number[];
+}
+
+/** Aggregate result of an IP Scanner subnet sweep. */
+export interface IpScanResult {
+  cidr: string;
+  host_count: number;
+  online_count: number;
+  duration_ms: number;
+  hosts: IpScanHost[];
+}
+
 export interface Finding {
   id: string;
   rule_id: string;
@@ -479,6 +500,16 @@ export interface AvWarning {
   /** "dante" | "multicast" | "ptp" | "wifi" | "qos" | "general". */
   category: string;
   message: string;
+}
+
+export interface RunbookSummary {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  applies_to: string[];
+  symptoms: string[];
+  step_count: number;
 }
 
 export interface IgmpQuerier {

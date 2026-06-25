@@ -23,6 +23,16 @@ import type { LiveSample } from "../types";
 
 type MetricKey = "rssi_dbm" | "gateway_ms" | "internet_ms" | "dns_ms";
 
+/** Max points rendered per sparkline. The store retains ~3600 (1 h @ 1 Hz)
+ *  for stats, but recharts only needs a bounded set to draw a smooth 112px
+ *  chart — capping this is what keeps the live view from locking the UI. */
+const MAX_CHART_POINTS = 240;
+
+/** Rolling window the charts display, in seconds. The store still keeps a
+ *  full hour of samples for stats/trends; the charts only plot the most
+ *  recent CHART_WINDOW_SECONDS. */
+const CHART_WINDOW_SECONDS = 1800; // 30 min
+
 interface PanelDef {
   key: MetricKey;
   label: string;
@@ -248,21 +258,44 @@ function Panel({ panel, rows }: PanelProps) {
   // downward trend is improving; for "higher-is-better", upward is improving.
   const isImproving = panel.lowerIsBetter ? dir === "down" : dir === "up";
 
-  const chartData = useMemo(
-    () =>
-      rows.map((r) => ({
-        ago: r.ago,
-        clock: r.clock,
-        v: r[panel.key],
-      })),
-    [rows, panel.key],
-  );
+  const chartData = useMemo(() => {
+    const mapped = rows.map((r) => ({
+      ago: r.ago,
+      clock: r.clock,
+      v: r[panel.key],
+    }));
+    // The store keeps up to an hour of 1 Hz samples (≈3600 points). Handing
+    // all of them to recharts for every metric tick is what locks the UI:
+    // four SVG area charts each recomputing thousands of points per second
+    // saturates the WebView's main thread. A 112px-tall sparkline can't show
+    // more than a few hundred points anyway, so bucket down to MAX_CHART_POINTS,
+    // keeping the most extreme (worst-direction) value per bucket so latency
+    // spikes / signal dips stay visible.
+    if (mapped.length <= MAX_CHART_POINTS) return mapped;
+    const bucket = Math.ceil(mapped.length / MAX_CHART_POINTS);
+    const out: typeof mapped = [];
+    for (let i = 0; i < mapped.length; i += bucket) {
+      const slice = mapped.slice(i, i + bucket);
+      let chosen = slice[slice.length - 1];
+      let worst: (typeof slice)[number] | null = null;
+      for (const p of slice) {
+        if (p.v == null) continue;
+        if (worst == null || worst.v == null) {
+          worst = p;
+        } else if (panel.lowerIsBetter ? p.v > worst.v : p.v < worst.v) {
+          worst = p;
+        }
+      }
+      out.push(worst ?? chosen);
+    }
+    return out;
+  }, [rows, panel.key, panel.lowerIsBetter]);
 
-  // Compute axis ticks: 60m, 45m, 30m, 15m, now.
+  // Compute axis ticks: 30m, 22.5m, 15m, 7.5m, now.
   const ageRange =
     chartData.length > 0 ? chartData[0].ago : 0; // first row = oldest = largest ago
   const ticks = useMemo(() => {
-    const candidates = [3600, 2700, 1800, 900, 0];
+    const candidates = [1800, 1350, 900, 450, 0];
     return candidates.filter((t) => t <= ageRange + 5);
   }, [ageRange]);
 
@@ -323,7 +356,7 @@ function Panel({ panel, rows }: PanelProps) {
             <XAxis
               dataKey="ago"
               type="number"
-              domain={[3600, 0]}
+              domain={[CHART_WINDOW_SECONDS, 0]}
               ticks={ticks}
               tickFormatter={xTickFormatter}
               tick={{ fill: "rgba(148,163,184,0.65)", fontSize: 10 }}
@@ -410,7 +443,10 @@ function Panel({ panel, rows }: PanelProps) {
 export function LiveMetricsChart() {
   const liveSamples = useApp((s) => s.liveSamples);
   const monitoring = useApp((s) => s.monitoring);
-  const rows = useMemo(() => toRows(liveSamples), [liveSamples]);
+  const rows = useMemo(
+    () => toRows(liveSamples).filter((r) => r.ago <= CHART_WINDOW_SECONDS),
+    [liveSamples],
+  );
 
   const seconds = liveSamples.length;
   const coverage = seconds === 0 ? "—" : formatAgo(seconds - 1);
@@ -423,7 +459,7 @@ export function LiveMetricsChart() {
             Live network telemetry
           </h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            1 Hz sampler · rolling 60 min · threshold lines mark{" "}
+            1 Hz sampler · rolling 30 min · threshold lines mark{" "}
             <span className="text-amber-400/80">warn</span> and{" "}
             <span className="text-rose-400/80">critical</span>
           </p>

@@ -1,0 +1,28 @@
+id: cisco-port-soft-recovery
+name: Cisco uplink soft recovery (approval-gated)
+category: remediation
+applies_to: [av, generic]
+description: >
+  Approval-gated remediation helper for Cisco IOS / IOS-XE switches.
+  Clears counters on the configured AV switch uplink interface to start
+  a fresh troubleshooting window without changing running-config.
+symptoms:
+  - "reset switch port counters"
+  - "clear counters on uplink"
+  - "after cabling fix start fresh"
+
+steps:
+  - id: clear_counters
+    tool: device.exec
+    args:
+      host: "{host.av_switch}"
+      cmd: "clear_interface_counters"
+      iface: "{host.av_switch_uplink_port}"
+    bind: clear
+    branch:
+      - when: clear.verdict == 'skipped'
+        note: "No host with role av_switch is configured, so this remediation step was skipped."
+      - when: clear.verdict == 'denied'
+        note: "Operator denied or timed out the approval prompt; no switch change was made."
+      - when: clear.exit == 0
+        note: "Counters cleared on {host.av_switch} {host.av_switch_uplink_port}. Capture new evidence for 5-10 minutes before comparing trends."

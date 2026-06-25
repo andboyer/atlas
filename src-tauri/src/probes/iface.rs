@@ -104,6 +104,38 @@ pub fn list_interfaces() -> Vec<NetworkInterfaceInfo> {
     }
 }
 
+/// Best-effort "auto" NIC resolution: pick the most plausible default
+/// interface when the operator hasn't pinned one. Used by surfaces that
+/// physically require a concrete interface name (e.g. iface-pinned
+/// runbook probes) and so cannot rely on the kernel's per-probe routing
+/// fallback the way the scan collectors do.
+///
+/// Selection: physical, administratively up, non-loopback, IPv4-bearing
+/// interfaces only — preferring wired over unknown over Wi-Fi (Dante /
+/// AES67 are wired technologies), then the kernel's stable name order
+/// (`en0` before `en1`, …). Returns `None` only when no such interface
+/// exists.
+pub fn default_interface() -> Option<String> {
+    // is_wireless ordering: wired (Some(false)) first, unknown (None)
+    // next, Wi-Fi (Some(true)) last.
+    fn medium_rank(is_wireless: Option<bool>) -> u8 {
+        match is_wireless {
+            Some(false) => 0,
+            None => 1,
+            Some(true) => 2,
+        }
+    }
+    list_interfaces()
+        .into_iter()
+        .filter(|i| i.is_up && !i.is_loopback && i.is_physical && i.ipv4.is_some())
+        .min_by(|a, b| {
+            medium_rank(a.is_wireless)
+                .cmp(&medium_rank(b.is_wireless))
+                .then_with(|| a.name.cmp(&b.name))
+        })
+        .map(|i| i.name)
+}
+
 #[cfg(unix)]
 fn list_unix() -> Vec<NetworkInterfaceInfo> {
     let mut by_name: HashMap<String, NetworkInterfaceInfo> = HashMap::new();

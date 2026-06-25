@@ -7,9 +7,10 @@ rule engine + optional LLM explanations) to detect complex Wi-Fi network
 issues — including **IoT device dropouts** and **POS terminal random
 disconnects** (Clover, Square, Toast, etc.) — and recommend concrete fixes.
 
-> **Status:** Phase 1 scaffold. The app runs end-to-end with a mock
-> collector that demonstrates the UI, rule engine, and recommendations.
-> Phase 2 will add real per-OS WiFi/LAN collectors.
+> **Status:** v0.2.2 shipped. Atlas now includes host inventory, skill
+> packs, runbook tooling, and approval-gated device execution with audit
+> logging. Collector coverage and deeper per-OS probing continue to expand
+> through ongoing Phase 2+ work.
 
 ## Highlights
 

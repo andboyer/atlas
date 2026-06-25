@@ -77,6 +77,8 @@ fn user_msg(rb: &Runbook, steps: &[StepRecord], bindings: &BTreeMap<String, Valu
             StepStatus::Warn => "!",
             StepStatus::Failed => "✗",
             StepStatus::Skipped => "·",
+            StepStatus::Denied => "⛔",
+            StepStatus::Unavailable => "∅",
             StepStatus::Error => "?",
             StepStatus::NotImplemented => "…",
         };
@@ -118,7 +120,12 @@ fn derive_outcome(steps: &[StepRecord]) -> ExecutionOutcome {
     for s in steps {
         match s.status {
             StepStatus::Failed => return ExecutionOutcome::HardFail,
-            StepStatus::Warn | StepStatus::Error if out == ExecutionOutcome::Clean => {
+            StepStatus::Warn
+            | StepStatus::Denied
+            | StepStatus::Unavailable
+            | StepStatus::Error
+                if out == ExecutionOutcome::Clean =>
+            {
                 out = ExecutionOutcome::Issues;
             }
             _ => {}

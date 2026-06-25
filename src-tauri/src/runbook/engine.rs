@@ -316,13 +316,24 @@ impl Engine {
 
             match exec_result {
                 Ok(value) => {
-                    let stub_not_impl = value
+                    let verdict = value
                         .get("verdict")
                         .and_then(|v| v.as_str())
-                        .map(|s| s == "not_implemented")
-                        .unwrap_or(false);
-                    if stub_not_impl {
-                        rec.status = StepStatus::NotImplemented;
+                        .unwrap_or("");
+                    match verdict {
+                        "skipped" => rec.status = StepStatus::Skipped,
+                        "denied" => rec.status = StepStatus::Denied,
+                        "unavailable" => rec.status = StepStatus::Unavailable,
+                        "not_implemented" => rec.status = StepStatus::NotImplemented,
+                        _ => {}
+                    }
+                    if matches!(
+                        rec.status,
+                        StepStatus::Skipped
+                            | StepStatus::Denied
+                            | StepStatus::Unavailable
+                            | StepStatus::NotImplemented
+                    ) {
                         if let Some(note) = value.get("note").and_then(|v| v.as_str()) {
                             rec.notes.push(note.to_string());
                         }
@@ -388,7 +399,12 @@ impl Engine {
             // Branch dispatch (only when status is OK or Warn or NotImplemented).
             let consider_branches = matches!(
                 rec.status,
-                StepStatus::Ok | StepStatus::Warn | StepStatus::NotImplemented
+                StepStatus::Ok
+                    | StepStatus::Warn
+                    | StepStatus::Skipped
+                    | StepStatus::Denied
+                    | StepStatus::Unavailable
+                    | StepStatus::NotImplemented
             );
             if consider_branches {
                 for br in &step.branch {

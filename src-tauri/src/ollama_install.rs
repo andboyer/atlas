@@ -11,13 +11,14 @@
 //!     or "Not installed, install it for me".
 //!   * [`install_ollama`] — downloads the official release artifact
 //!     (`Ollama-darwin.zip` / `OllamaSetup.exe`) from `ollama.com`,
-//!     verifies SHA256 against the publisher's own `.sha256` sidecar at
-//!     the same URL, extracts (macOS) or launches the elevated installer
-//!     (Windows), and emits streaming progress over a [`tauri::ipc::Channel`].
+//!     verifies SHA256 against the publisher's own `sha256sum.txt` release
+//!     manifest (which lists every asset), extracts (macOS) or launches
+//!     the elevated installer (Windows), and emits streaming progress over
+//!     a [`tauri::ipc::Channel`].
 //!   * [`launch_ollama`] — opens the menu-bar app / starts `ollama serve`
 //!     for the "installed but not running" case.
 //!
-//! The SHA256 sidecar approach matches what Ollama themselves publish for
+//! The SHA256 manifest approach matches what Ollama themselves publish for
 //! the same release and is the same trust boundary as the canonical
 //! `curl … | sh` install. We do NOT pin a hash at Atlas build time
 //! because Ollama ships an auto-update every few weeks and a hard pin
@@ -95,7 +96,7 @@ pub async fn check_ollama_status(base_url: Option<String>) -> OllamaStatus {
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("http://localhost:11434")
+        .unwrap_or("http://127.0.0.1:11434")
         .trim_end_matches('/')
         .to_string();
 
@@ -269,16 +270,21 @@ async fn install_ollama_impl(progress: &Channel<InstallProgress>) -> Result<()> 
     use sha2::{Digest, Sha256};
     use std::io::Write;
 
+    // Ollama does NOT publish per-asset `.zip.sha256` sidecars — those 404.
+    // Instead each GitHub release ships one `sha256sum.txt` listing every
+    // asset as `<hash>  ./<filename>`. We fetch that via the same
+    // `ollama.com/download/…` redirect so the checksum stays pinned to the
+    // exact release version the zip download resolves to.
     #[cfg(target_os = "macos")]
     let (url, sha_url, filename) = (
         "https://ollama.com/download/Ollama-darwin.zip",
-        "https://ollama.com/download/Ollama-darwin.zip.sha256",
+        "https://ollama.com/download/sha256sum.txt",
         "Ollama-darwin.zip",
     );
     #[cfg(target_os = "windows")]
     let (url, sha_url, filename) = (
         "https://ollama.com/download/OllamaSetup.exe",
-        "https://ollama.com/download/OllamaSetup.exe.sha256",
+        "https://ollama.com/download/sha256sum.txt",
         "OllamaSetup.exe",
     );
 
@@ -292,26 +298,33 @@ async fn install_ollama_impl(progress: &Channel<InstallProgress>) -> Result<()> 
         .build()
         .context("build http client")?;
 
-    // 1. Fetch expected SHA256 from the sidecar at the same URL.
+    // 1. Fetch the release checksum manifest and pull out our asset's line.
     let sha_body = client
         .get(sha_url)
         .send()
         .await
-        .with_context(|| format!("fetch sha256 sidecar at {sha_url}"))?
+        .with_context(|| format!("fetch sha256 manifest at {sha_url}"))?
         .error_for_status()
-        .with_context(|| format!("sha256 sidecar HTTP error at {sha_url}"))?
+        .with_context(|| format!("sha256 manifest HTTP error at {sha_url}"))?
         .text()
         .await
-        .context("read sha256 body")?;
+        .context("read sha256 manifest body")?;
+    // Each line is `<64-hex-hash>  ./<filename>` (or `*<filename>`). Match the
+    // line whose final path component equals our asset and take its hash.
     let expected_sha = sha_body
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| anyhow!("empty sha256 sidecar at {sha_url}"))?
-        .to_lowercase();
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let hash = parts.next()?;
+            let name = parts.next()?;
+            let base = name.trim_start_matches('*').rsplit('/').next()?;
+            (base == filename).then(|| hash.to_lowercase())
+        })
+        .ok_or_else(|| anyhow!("no sha256 entry for {filename} in manifest at {sha_url}"))?;
     if expected_sha.len() != 64 || !expected_sha.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(anyhow!(
-            "sha256 sidecar at {sha_url} returned unexpected content: {:?}",
-            sha_body.chars().take(80).collect::<String>()
+            "sha256 manifest at {sha_url} had a malformed hash for {filename}: {:?}",
+            expected_sha.chars().take(80).collect::<String>()
         ));
     }
 
@@ -413,6 +426,18 @@ async fn install_ollama_impl(progress: &Channel<InstallProgress>) -> Result<()> 
             .context("launch /Applications/Ollama.app")?;
         // Give the menu-bar daemon ~2s to bind :11434 before the UI re-polls.
         tokio::time::sleep(Duration::from_secs(2)).await;
+        // Once the daemon is up, pull the default `llama3` model so the
+        // user has a working LLM the moment install finishes. Best-effort:
+        // a network hiccup here shouldn't fail the (already-completed)
+        // install — we just leave a note and let the user pull it later.
+        if let Err(e) = pull_default_model(progress).await {
+            let _ = progress.send(InstallProgress::Installing {
+                step: format!(
+                    "Ollama installed. Couldn't auto-pull llama3 ({e}); \
+                     run `ollama pull llama3` once the daemon is up."
+                ),
+            });
+        }
     }
     #[cfg(target_os = "windows")]
     {
@@ -426,6 +451,96 @@ async fn install_ollama_impl(progress: &Channel<InstallProgress>) -> Result<()> 
             .no_console()
             .spawn()
             .context("spawn OllamaSetup.exe")?;
+    }
+
+    Ok(())
+}
+
+/// After the daemon comes up, run the equivalent of `ollama pull llama3`
+/// over the HTTP API so the user has a working model immediately. Waits
+/// up to ~30s for the daemon to bind `:11434`, then streams the pull and
+/// emits coarse progress as `InstallProgress::Installing` steps (≤4/sec).
+#[cfg(target_os = "macos")]
+async fn pull_default_model(progress: &Channel<InstallProgress>) -> Result<()> {
+    const MODEL: &str = "llama3";
+    const BASE: &str = "http://127.0.0.1:11434";
+
+    // 1. Wait for the daemon to answer /api/version (up to ~30s).
+    let probe = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1500))
+        .build()
+        .context("build daemon probe client")?;
+    let mut ready = false;
+    for _ in 0..30 {
+        if probe
+            .get(format!("{BASE}/api/version"))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+        {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    if !ready {
+        return Err(anyhow!("daemon not reachable at {BASE} within 30s"));
+    }
+
+    // 2. Stream the pull. `/api/pull` returns newline-delimited JSON
+    //    status objects; the download lines carry `total`/`completed`
+    //    byte counters we surface as a percentage. The model is several
+    //    GB, so we give this request a generous 1-hour ceiling.
+    let _ = progress.send(InstallProgress::Installing {
+        step: format!("Downloading {MODEL} model…"),
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3600))
+        .build()
+        .context("build model-pull client")?;
+    let mut stream = client
+        .post(format!("{BASE}/api/pull"))
+        .json(&serde_json::json!({ "model": MODEL, "stream": true }))
+        .send()
+        .await
+        .with_context(|| format!("start pull of {MODEL}"))?
+        .error_for_status()
+        .with_context(|| format!("pull {MODEL} HTTP error"))?;
+
+    let mut buf = String::new();
+    let mut next_emit = std::time::Instant::now();
+    loop {
+        let chunk = stream.chunk().await.context("pull stream chunk")?;
+        let Some(chunk) = chunk else { break };
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(nl) = buf.find('\n') {
+            let line: String = buf.drain(..=nl).collect();
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+                return Err(anyhow!("Ollama failed to pull {MODEL}: {err}"));
+            }
+            let now = std::time::Instant::now();
+            if now >= next_emit {
+                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("downloading");
+                let total = v.get("total").and_then(|n| n.as_u64()).unwrap_or(0);
+                let completed = v.get("completed").and_then(|n| n.as_u64()).unwrap_or(0);
+                let step = if total > 0 {
+                    let pct = ((completed as f64 / total as f64) * 100.0).round() as u64;
+                    format!("Pulling {MODEL}: {status} ({pct}%)")
+                } else {
+                    format!("Pulling {MODEL}: {status}")
+                };
+                let _ = progress.send(InstallProgress::Installing { step });
+                next_emit = now + Duration::from_millis(250);
+            }
+        }
     }
 
     Ok(())

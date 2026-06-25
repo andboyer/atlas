@@ -350,10 +350,10 @@ impl Tool for GatewayTool {
 /// Privileged IGMP listener. Re-execs the current binary under
 /// platform-native elevation (macOS osascript / Windows UAC / Linux
 /// pkexec) and parses the resulting `IgmpProbeResult`. If elevation
-/// fails or is cancelled, falls back to a `verdict: "not_implemented"`
+/// fails or is cancelled, falls back to a `verdict: "unavailable"`
 /// JSON shape so YAML runbooks' `note_if: igmp.verdict ==
-/// 'not_implemented'` guards still fire and the engine treats the step
-/// as `StepStatus::NotImplemented` rather than a hard error.
+/// 'unavailable'` guards still fire and the engine treats the step as
+/// `StepStatus::Unavailable` rather than a hard error.
 pub struct IgmpListenTool;
 #[async_trait]
 impl Tool for IgmpListenTool {
@@ -380,7 +380,7 @@ impl Tool for IgmpListenTool {
                     "queriers_seen": [],
                     "reports_seen": 0,
                     "leaves_seen": 0,
-                    "verdict": "not_implemented",
+                    "verdict": "unavailable",
                     "error": format!("locate current exe: {e}"),
                     "note": "Could not resolve the Atlas binary path; the privileged IGMP listener was skipped."
                 }));
@@ -396,7 +396,7 @@ impl Tool for IgmpListenTool {
                     "queriers_seen": [],
                     "reports_seen": 0,
                     "leaves_seen": 0,
-                    "verdict": "not_implemented",
+                    "verdict": "unavailable",
                     "error": format!("parse IgmpProbeResult: {e}"),
                     "note": "The privileged IGMP listener returned a non-JSON payload."
                 })),
@@ -407,7 +407,7 @@ impl Tool for IgmpListenTool {
                 "queriers_seen": [],
                 "reports_seen": 0,
                 "leaves_seen": 0,
-                "verdict": "not_implemented",
+                "verdict": "unavailable",
                 "error": e,
                 "note": "Privileged IGMP listener was unavailable or declined; runbook continued without switch-side data."
             })),

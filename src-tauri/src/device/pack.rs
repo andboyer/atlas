@@ -88,7 +88,10 @@ pub struct SkillPack {
     /// rely on the transport's default behaviour.
     #[serde(default)]
     pub login: Option<LoginSpec>,
-    #[serde(rename = "command", default)]
+    // TOML uses `[[command]]` blocks; the frontend expects a `commands`
+    // array. Split the rename by direction so TOML still deserializes
+    // from `command` while JSON serialized to the UI is `commands`.
+    #[serde(rename(serialize = "commands", deserialize = "command"), default)]
     pub commands: Vec<CommandSpec>,
 }
 
@@ -212,19 +215,18 @@ mod tests {
     }
 
     #[test]
-    fn cisco_ios_has_read_commands() {
+    fn cisco_ios_has_read_and_mutate_commands() {
         let reg = load_bundled();
         let pack = reg.get("cisco-ios").expect("cisco-ios pack present");
         assert!(!pack.commands.is_empty(), "cisco-ios should ship commands");
-        for cmd in &pack.commands {
-            assert_eq!(
-                cmd.risk,
-                Risk::Read,
-                "v1 ships only Read commands; `{}` is {:?}",
-                cmd.id,
-                cmd.risk
-            );
-        }
+        assert!(
+            pack.commands.iter().any(|c| c.risk == Risk::Read),
+            "cisco-ios should include read commands"
+        );
+        assert!(
+            pack.commands.iter().any(|c| c.risk == Risk::Mutate),
+            "cisco-ios should include at least one mutate command"
+        );
     }
 
     #[test]

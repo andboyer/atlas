@@ -15,8 +15,8 @@
 //!  * **Composable.** Runbooks can `runbook:` into other runbooks
 //!    (one level of nesting) so common subtrees (e.g. `igmp-no-querier`)
 //!    can be invoked from multiple parents.
-//!  * **Read-only in v1.** No tool ships that mutates remote state. Write
-//!    surfaces will land in a later phase with explicit approval gating.
+//!  * **Safety-gated writes.** Non-read commands require explicit operator
+//!    approval before execution; read probes continue automatically.
 
 pub mod engine;
 pub mod expr;
@@ -150,6 +150,12 @@ pub enum StepStatus {
     Failed,
     /// `when` precondition was false; tool did not run.
     Skipped,
+    /// Operator denied a gated `Mutate` / `Dangerous` command (or the
+    /// approval window timed out).
+    Denied,
+    /// Tool could not run in the current environment (for example,
+    /// elevation declined or a platform capability is unavailable).
+    Unavailable,
     /// Tool itself errored.
     Error,
     /// Tool ran but reported it could not execute in this build /
