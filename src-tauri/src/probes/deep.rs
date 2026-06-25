@@ -33,12 +33,12 @@
 #[cfg(target_os = "macos")]
 use std::ffi::CString;
 use std::io::ErrorKind;
+#[cfg(not(target_os = "macos"))]
 use std::mem::MaybeUninit;
 use std::net::Ipv4Addr;
-#[cfg(target_os = "macos")]
-use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "macos"))]
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::types::{IgmpProbeResult, IgmpQuerier};
@@ -134,68 +134,20 @@ fn run_igmp_listen(args: &[String]) -> i32 {
     0
 }
 
-/// Open a raw IPv4 socket bound to the specified interface and passively
-/// observe IGMP packets for `listen_secs` seconds. We **never** send any
-/// packets — listening only — so we cannot win the IGMP querier election
-/// or otherwise alter the network's multicast posture.
+/// Passively observe IGMP for `listen_secs` seconds and classify what we see
+/// into an `IgmpProbeResult`. We **never** send any packets — listening only
+/// — so we cannot win the IGMP querier election or otherwise alter the
+/// network's multicast posture.
 ///
-/// Returns a populated `IgmpProbeResult`. Errors only when socket setup
-/// fails (e.g. not root, or interface doesn't exist); a successful
-/// listen with zero observed packets is a valid result (`verdict =
-/// "silent"`).
+/// The capture mechanism is platform-specific (`capture_igmp`): BPF on macOS
+/// (the kernel does not deliver inbound IGMP to raw sockets there), and a raw
+/// `IPPROTO_IGMP` socket on Linux/Windows.
+///
+/// Errors only when capture setup fails (e.g. not root, or interface doesn't
+/// exist); a successful listen with zero observed packets is a valid result
+/// (`verdict = "silent"`).
 fn listen_for_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<IgmpProbeResult> {
-    let socket = Socket::new(
-        Domain::IPV4,
-        Type::RAW,
-        // IGMP IANA protocol number is 2 (RFC 3232 / IANA assignment).
-        // Using a literal avoids libc::IPPROTO_IGMP, which is not defined on Windows.
-        Some(Protocol::from(2)),
-    )?;
-    // Short per-read timeout so we can stop promptly on `listen_secs`.
-    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
-    // Platform-specific bind + per-interface pinning. On macOS/Linux we
-    // bind to INADDR_ANY and pin via setsockopt; on Windows we MUST bind
-    // to the interface IPv4 address (INADDR_ANY won't deliver multicast
-    // on a raw socket on Windows) and then enable SIO_RCVALL (with a
-    // fallback to SIO_RCVALL_IGMPMCAST if the firewall blocks it).
-    bind_for_igmp(&socket, iface)?;
-
-    let deadline = Instant::now() + Duration::from_secs(listen_secs as u64);
-    let mut queriers: Vec<IgmpQuerier> = Vec::new();
-    let mut reports: u32 = 0;
-    let mut leaves: u32 = 0;
-    let mut buf = [MaybeUninit::<u8>::uninit(); 2048];
-
-    while Instant::now() < deadline {
-        match socket.recv(&mut buf) {
-            Ok(n) => {
-                // SAFETY: socket2 guarantees the first `n` bytes are initialised on
-                // a successful `recv`.
-                let data: &[u8] =
-                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
-                if let Some(pkt) = parse_ip_igmp(data) {
-                    match pkt.msg_type {
-                        // Membership Query (v1/v2/v3) — sent by the querier.
-                        0x11 => queriers.push(IgmpQuerier {
-                            from: pkt.src.to_string(),
-                            version: pkt.version,
-                            max_resp_ds: pkt.max_resp as u32,
-                            group: pkt.group.to_string(),
-                        }),
-                        // Membership Reports (v1/v2/v3).
-                        0x12 | 0x16 | 0x22 => reports = reports.saturating_add(1),
-                        // Leave Group (v2 only).
-                        0x17 => leaves = leaves.saturating_add(1),
-                        _ => {}
-                    }
-                }
-            }
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
-                continue;
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
+    let (mut queriers, reports, leaves) = capture_igmp(iface, listen_secs)?;
 
     // Dedup: a healthy querier emits ~1 General Query / 125 s, so we
     // usually see at most one entry per (src, group). Defensive against
@@ -365,45 +317,280 @@ fn parse_ip_igmp(data: &[u8]) -> Option<ParsedIgmp> {
     })
 }
 
-/// macOS `IP_BOUND_IF`. Restricts the socket to a single interface so a
-/// multihomed Mac (e.g. en0 Wi-Fi + en4 USB-Ethernet to a Dante VLAN)
-/// can pick which network to probe.
+/// Tally a parsed IGMP packet into the running query/report/leave counters.
+fn classify_igmp(
+    pkt: &ParsedIgmp,
+    queriers: &mut Vec<IgmpQuerier>,
+    reports: &mut u32,
+    leaves: &mut u32,
+) {
+    match pkt.msg_type {
+        // Membership Query (v1/v2/v3) — sent by the querier.
+        0x11 => queriers.push(IgmpQuerier {
+            from: pkt.src.to_string(),
+            version: pkt.version,
+            max_resp_ds: pkt.max_resp as u32,
+            group: pkt.group.to_string(),
+        }),
+        // Membership Reports (v1/v2/v3).
+        0x12 | 0x16 | 0x22 => *reports = reports.saturating_add(1),
+        // Leave Group (v2 only).
+        0x17 => *leaves = leaves.saturating_add(1),
+        _ => {}
+    }
+}
+
+/// Linux & Windows deliver inbound IGMP to a raw `IPPROTO_IGMP` socket, so we
+/// capture there with socket2. (macOS does NOT — see the BPF variant below.)
+#[cfg(not(target_os = "macos"))]
+fn capture_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<(Vec<IgmpQuerier>, u32, u32)> {
+    let socket = Socket::new(
+        Domain::IPV4,
+        Type::RAW,
+        // IGMP IANA protocol number is 2 (RFC 3232 / IANA assignment).
+        // Using a literal avoids libc::IPPROTO_IGMP, which is not defined on Windows.
+        Some(Protocol::from(2)),
+    )?;
+    // Short per-read timeout so we can stop promptly on `listen_secs`.
+    socket.set_read_timeout(Some(Duration::from_millis(500)))?;
+    // Linux pins via SO_BINDTODEVICE; Windows binds the iface IPv4 and enables
+    // SIO_RCVALL so the raw socket sees queries it isn't directly addressed by.
+    bind_for_igmp(&socket, iface)?;
+
+    let deadline = Instant::now() + Duration::from_secs(listen_secs as u64);
+    let mut queriers: Vec<IgmpQuerier> = Vec::new();
+    let mut reports: u32 = 0;
+    let mut leaves: u32 = 0;
+    let mut buf = [MaybeUninit::<u8>::uninit(); 2048];
+
+    while Instant::now() < deadline {
+        match socket.recv(&mut buf) {
+            Ok(n) => {
+                // SAFETY: socket2 guarantees the first `n` bytes are initialised on
+                // a successful `recv`.
+                let data: &[u8] =
+                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n) };
+                if let Some(pkt) = parse_ip_igmp(data) {
+                    classify_igmp(&pkt, &mut queriers, &mut reports, &mut leaves);
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok((queriers, reports, leaves))
+}
+
+/// macOS does not deliver inbound IGMP to a raw `IPPROTO_IGMP` socket — the
+/// kernel's `igmp_input` consumes membership queries to drive the host state
+/// machine and never copies them to raw sockets (verified empirically: a raw
+/// socket sees zero IGMP while BPF/tcpdump on the same NIC sees the queries).
+/// So we capture at the datalink layer via BPF, exactly like tcpdump, with a
+/// kernel-side "IGMP only" filter to stay off the audio-multicast hot path.
 #[cfg(target_os = "macos")]
-fn bind_for_igmp(sock: &Socket, iface: &str) -> std::io::Result<()> {
-    const IP_BOUND_IF: libc::c_int = 25;
-    // Bind to INADDR_ANY first — raw sockets receive without an explicit
-    // bind on macOS, but we do it for symmetry with other platforms and
-    // to give the kernel a hint that we never want to send.
-    let any: std::net::SocketAddr =
-        std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, 0));
-    sock.bind(&any.into())?;
-    // "0.0.0.0" / "any" / empty → don't pin to a specific interface; let
-    // the kernel deliver IGMP from whichever interface receives it.
-    if iface.is_empty() || iface == "0.0.0.0" || iface.eq_ignore_ascii_case("any") {
-        return Ok(());
+fn capture_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<(Vec<IgmpQuerier>, u32, u32)> {
+    use anyhow::Context;
+
+    // BPF ioctls (<net/bpf.h>) for group 'B' (0x42), encoded via the BSD
+    // _IOR/_IOW macros: inout | ((sizeof & 0x1fff) << 16) | (g << 8) | num.
+    const BIOCGBLEN: libc::c_ulong = 0x4004_4266; // _IOR('B',102,u_int)
+    const BIOCSETIF: libc::c_ulong = 0x8020_426c; // _IOW('B',108,struct ifreq)
+    const BIOCIMMEDIATE: libc::c_ulong = 0x8004_4270; // _IOW('B',112,u_int)
+    const BIOCSETF: libc::c_ulong = 0x8010_4267; // _IOW('B',103,struct bpf_program)
+
+    let fd = open_bpf().context("open /dev/bpf")?;
+    let _guard = BpfFd(fd);
+
+    // Bind the BPF device to the requested interface. struct ifreq is 32 bytes
+    // on macOS (16-byte name + 16-byte ifr_ifru union); BIOCSETIF only reads
+    // the name, so a local repr(C) twin avoids depending on libc::ifreq.
+    #[repr(C)]
+    struct IfReq {
+        ifr_name: [libc::c_char; 16],
+        _ifr_ifru: [u8; 16],
     }
-    let cname = CString::new(iface)
-        .map_err(|_| std::io::Error::new(ErrorKind::InvalidInput, "iface contains NUL"))?;
-    let idx = unsafe { libc::if_nametoindex(cname.as_ptr()) };
-    if idx == 0 {
-        return Err(std::io::Error::new(
-            ErrorKind::NotFound,
-            format!("interface {iface} not found"),
-        ));
-    }
-    let ret = unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            libc::IPPROTO_IP,
-            IP_BOUND_IF,
-            &idx as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_uint>() as libc::socklen_t,
-        )
+    let mut ifr = IfReq {
+        ifr_name: [0; 16],
+        _ifr_ifru: [0; 16],
     };
-    if ret != 0 {
+    let nbytes = iface.as_bytes();
+    if nbytes.len() >= ifr.ifr_name.len() {
+        anyhow::bail!("interface name too long: {iface}");
+    }
+    for (i, b) in nbytes.iter().enumerate() {
+        ifr.ifr_name[i] = *b as libc::c_char;
+    }
+    if unsafe { libc::ioctl(fd, BIOCSETIF, &ifr) } < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("BIOCSETIF {iface}"));
+    }
+
+    // Immediate mode: hand us each packet as it arrives instead of buffering.
+    let one: libc::c_uint = 1;
+    if unsafe { libc::ioctl(fd, BIOCIMMEDIATE, &one) } < 0 {
+        return Err(std::io::Error::last_os_error()).context("BIOCIMMEDIATE");
+    }
+
+    // Kernel-side filter: Ethernet ethertype == IPv4 && IP protocol == 2.
+    install_igmp_filter(fd, BIOCSETF)?;
+
+    // Reads must be sized to the kernel's BPF buffer.
+    let mut blen: libc::c_uint = 0;
+    if unsafe { libc::ioctl(fd, BIOCGBLEN, &mut blen) } < 0 {
+        return Err(std::io::Error::last_os_error()).context("BIOCGBLEN");
+    }
+    let blen = if blen == 0 { 4096 } else { blen as usize };
+    let mut buf = vec![0u8; blen];
+
+    let deadline = Instant::now() + Duration::from_secs(listen_secs as u64);
+    let mut queriers: Vec<IgmpQuerier> = Vec::new();
+    let mut reports: u32 = 0;
+    let mut leaves: u32 = 0;
+
+    while Instant::now() < deadline {
+        // Wait up to 500ms for readability so we periodically re-check the deadline.
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let pr = unsafe { libc::poll(&mut pfd, 1, 500) };
+        if pr < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e).context("poll(bpf)");
+        }
+        if pr == 0 {
+            continue;
+        }
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) {
+                continue;
+            }
+            return Err(e).context("read(bpf)");
+        }
+        let n = n as usize;
+
+        // Walk the BPF records packed into the buffer.
+        let mut p = 0usize;
+        while p + 18 <= n {
+            // struct bpf_hdr: bh_tstamp(8) | bh_caplen@8 | bh_datalen@12 | bh_hdrlen@16(u16).
+            let caplen = u32::from_ne_bytes(buf[p + 8..p + 12].try_into().unwrap()) as usize;
+            let hdrlen = u16::from_ne_bytes(buf[p + 16..p + 18].try_into().unwrap()) as usize;
+            if hdrlen == 0 {
+                break;
+            }
+            let start = p + hdrlen;
+            let end = start + caplen;
+            if end > n {
+                break;
+            }
+            if let Some(pkt) = parse_eth_ip_igmp(&buf[start..end]) {
+                classify_igmp(&pkt, &mut queriers, &mut reports, &mut leaves);
+            }
+            // Records are padded to BPF_ALIGNMENT (sizeof(int32_t) = 4) on macOS.
+            p += (hdrlen + caplen + 3) & !3;
+        }
+    }
+    Ok((queriers, reports, leaves))
+}
+
+/// Open the first available BPF device (modern macOS clones `/dev/bpf`; older
+/// systems expose numbered minors `/dev/bpf0..255`). Requires root.
+#[cfg(target_os = "macos")]
+fn open_bpf() -> std::io::Result<libc::c_int> {
+    let mut candidates: Vec<String> = vec!["/dev/bpf".to_string()];
+    for i in 0..256 {
+        candidates.push(format!("/dev/bpf{i}"));
+    }
+    let mut last = std::io::Error::new(ErrorKind::NotFound, "no /dev/bpf device available");
+    for path in candidates {
+        let Ok(c) = CString::new(path) else { continue };
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR) };
+        if fd >= 0 {
+            return Ok(fd);
+        }
+        // EBUSY → minor in use, try the next; other errors we also skip past.
+        last = std::io::Error::last_os_error();
+    }
+    Err(last)
+}
+
+/// Install a classic-BPF program accepting only Ethernet-framed IPv4 IGMP —
+/// the same filter tcpdump compiles for `igmp` on a DLT_EN10MB link.
+#[cfg(target_os = "macos")]
+fn install_igmp_filter(fd: libc::c_int, biocsetf: libc::c_ulong) -> std::io::Result<()> {
+    #[repr(C)]
+    struct BpfInsn {
+        code: u16,
+        jt: u8,
+        jf: u8,
+        k: u32,
+    }
+    #[repr(C)]
+    struct BpfProgram {
+        bf_len: libc::c_uint,
+        bf_insns: *const BpfInsn,
+    }
+    //   ldh [12]               ; ethertype
+    //   jeq #0x0800, +0, +3    ; IPv4? else REJECT
+    //   ldb [23]               ; IPv4 protocol byte
+    //   jeq #0x02,  +0, +1     ; IGMP? else REJECT
+    //   ret #262144            ; ACCEPT
+    //   ret #0                 ; REJECT
+    let prog = [
+        BpfInsn { code: 0x28, jt: 0, jf: 0, k: 12 },
+        BpfInsn { code: 0x15, jt: 0, jf: 3, k: 0x0800 },
+        BpfInsn { code: 0x30, jt: 0, jf: 0, k: 23 },
+        BpfInsn { code: 0x15, jt: 0, jf: 1, k: 2 },
+        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0x0004_0000 },
+        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0 },
+    ];
+    let bp = BpfProgram {
+        bf_len: prog.len() as libc::c_uint,
+        bf_insns: prog.as_ptr(),
+    };
+    if unsafe { libc::ioctl(fd, biocsetf, &bp) } < 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Strip the Ethernet (and optional single 802.1Q tag) header, then hand the
+/// IPv4 payload to `parse_ip_igmp`.
+#[cfg(target_os = "macos")]
+fn parse_eth_ip_igmp(frame: &[u8]) -> Option<ParsedIgmp> {
+    if frame.len() < 14 {
+        return None;
+    }
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    let ip_off = match ethertype {
+        0x0800 => 14,
+        0x8100 => {
+            if frame.len() < 18 || u16::from_be_bytes([frame[16], frame[17]]) != 0x0800 {
+                return None;
+            }
+            18
+        }
+        _ => return None,
+    };
+    parse_ip_igmp(&frame[ip_off..])
+}
+
+/// RAII guard closing the BPF file descriptor.
+#[cfg(target_os = "macos")]
+struct BpfFd(libc::c_int);
+#[cfg(target_os = "macos")]
+impl Drop for BpfFd {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.0) };
+    }
 }
 
 /// Linux: bind to INADDR_ANY then pin via `SO_BINDTODEVICE` (requires
