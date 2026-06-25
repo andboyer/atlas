@@ -82,13 +82,33 @@ pub async fn collect(
         .unwrap_or(false);
 
     // Augment each Dante device with TCP reachability + on-Wi-Fi flag.
+    //
+    // The on-Wi-Fi flag can only be inferred honestly when the host has a
+    // *separate* Wi-Fi subnet distinct from the wired audio path: a Dante
+    // endpoint that turns up on that other /24 is genuinely on Wi-Fi. On a
+    // flat single-subnet network (wired + wireless sharing one /24) — or when
+    // we're probing over Wi-Fi ourselves — subnet membership reveals nothing
+    // about a remote device's physical medium, so flagging every endpoint
+    // "on Wi-Fi" is a false positive (every wired Dante box on the audio VLAN
+    // would light up). In those cases we leave the per-device flag off and
+    // rely on the host-level "diagnosing from Wi-Fi" advisory instead.
     let wifi_subnet = if pin_is_wired {
-        // Explicit wired pin — never flag devices on this subnet as
-        // "on Wi-Fi". Fall through to whatever the scan reports for the
-        // host's actual Wi-Fi interface, which may legitimately differ.
-        wifi_subnet_from_scan(last_scan)
+        let wired_ip = pin_iface_info
+            .as_ref()
+            .and_then(|i| i.ipv4.as_deref())
+            .and_then(|s| s.parse::<Ipv4Addr>().ok());
+        match (wifi_subnet_from_scan(last_scan), wired_ip) {
+            // Only usable when the Wi-Fi /24 differs from the wired audio
+            // subnet; otherwise the network is flat and we can't tell medium.
+            (Some((wifi_net, mask)), Some(ip))
+                if !ip_in_subnet(&ip.to_string(), wifi_net, mask) =>
+            {
+                Some((wifi_net, mask))
+            }
+            _ => None,
+        }
     } else {
-        wifi_subnet_from_iface_or_scan(pin_iface_info.as_ref(), last_scan)
+        None
     };
     for device in devices.iter_mut() {
         device.control_ports_open = probe_dante_ports(&device.ip, pin.as_deref()).await;
@@ -138,38 +158,6 @@ async fn probe_dante_ports(ip: &str, pin_iface: Option<&str>) -> Vec<u16> {
         }
     }
     open
-}
-
-/// Pick the subnet we'll use to flag Dante devices as "on Wi-Fi".
-///
-///   - If the caller pinned an interface AND that interface is itself
-///     a wireless radio (or we couldn't classify it) AND it has an
-///     IPv4, use its IP as the subnet hint (a /24). This is right for
-///     the "I'm troubleshooting from this Wi-Fi host" workflow.
-///   - Otherwise fall back to the gateway IP from the last Wi-Fi scan.
-///
-/// Callers that have already determined the pinned NIC is wired skip
-/// this entirely and go straight to `wifi_subnet_from_scan` — the
-/// pinned NIC's subnet is the AV VLAN, not a Wi-Fi subnet, and using
-/// it here would incorrectly mark every wired Dante endpoint as
-/// "on Wi-Fi".
-fn wifi_subnet_from_iface_or_scan(
-    pin: Option<&iface_probe::NetworkInterfaceInfo>,
-    scan: Option<&ScanResult>,
-) -> Option<(Ipv4Addr, u8)> {
-    if let Some(info) = pin {
-        let treat_as_wifi = info.is_wireless.unwrap_or(true);
-        if treat_as_wifi {
-            if let Some(ip) = info
-                .ipv4
-                .as_deref()
-                .and_then(|s| s.parse::<Ipv4Addr>().ok())
-            {
-                return Some((ip, 24));
-            }
-        }
-    }
-    wifi_subnet_from_scan(scan)
 }
 
 /// Pull (network, netmask) from the last scan's Wi-Fi link information.
@@ -321,9 +309,11 @@ fn build_warnings(
             out.push(AvWarning {
                 severity: "warn".into(),
                 category: "multicast".into(),
-                message: "Dante devices announced via mDNS but no audio flows in the 239.69.x.x \
-                    range are joined locally. The control plane is reachable; the audio plane \
-                    likely is not (check IGMP snooping/querier on the switch)."
+                message: "Dante/AES67 devices announced via mDNS but no audio multicast flows \
+                    (Dante 239.69.x.x, org-local 239.192.x.x, or other 239/8 audio ranges) are \
+                    joined locally. The control plane is reachable; the audio plane likely is not \
+                    — check IGMP snooping/querier on this segment's switch (a querier on another \
+                    VLAN does not help)."
                     .into(),
             });
         }

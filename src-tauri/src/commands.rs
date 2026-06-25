@@ -668,6 +668,33 @@ pub struct FrontendChatMessage {
     pub content: String,
 }
 
+/// Snapshot the latest AV-over-IP diagnostics for LLM grounding, folding in
+/// any on-demand deep-probe results (PTP / IGMP / DSCP / LLDP / SAP) captured
+/// separately so the assistant sees the complete AV picture — not just the
+/// base Dante/multicast scan. Returns `None` only when neither an AV scan nor
+/// a deep probe has been run this session.
+fn av_context_snapshot(state: &AppState) -> Option<AvDiagnosticsResult> {
+    let mut av = state.last_av_diagnostics.lock().clone();
+    let deep = state.last_deep_probe.lock().clone();
+    match av.as_mut() {
+        Some(av) if av.deep_probe.is_none() => av.deep_probe = deep,
+        Some(_) => {}
+        None if deep.is_some() => {
+            av = Some(AvDiagnosticsResult {
+                generated_at: chrono::Utc::now(),
+                dante_devices: Vec::new(),
+                ddm_seen: false,
+                aes67_seen: false,
+                multicast: Vec::new(),
+                warnings: Vec::new(),
+                deep_probe: deep,
+            });
+        }
+        None => {}
+    }
+    av
+}
+
 #[tauri::command]
 pub async fn chat_query(
     state: State<'_, AppState>,
@@ -694,6 +721,7 @@ pub async fn chat_query(
         .collect();
 
     let metric_history = collect_metric_history(&state.store);
+    let av_diag = av_context_snapshot(&state);
 
     crate::llm::chat_query(
         provider,
@@ -702,6 +730,7 @@ pub async fn chat_query(
         base_url.as_deref(),
         &scan_result,
         Some(&metric_history),
+        av_diag.as_ref(),
         llm_history,
         &question,
     )
@@ -757,6 +786,7 @@ pub async fn chat_agent(
             })
             .collect();
         let metric_history = collect_metric_history(&state.store);
+        let av_diag = av_context_snapshot(&state);
         return crate::llm::chat_query(
             &provider,
             &api_key,
@@ -764,6 +794,7 @@ pub async fn chat_agent(
             base_url.as_deref(),
             &scan_result,
             Some(&metric_history),
+            av_diag.as_ref(),
             llm_history,
             &question,
         )
@@ -796,7 +827,9 @@ pub async fn chat_agent(
 
     // System prompt: diagnostic context + device catalog + tool guidance.
     let metric_history = collect_metric_history(&state.store);
-    let mut system = crate::llm::chat_system_prompt(&scan_result, Some(&metric_history));
+    let av_diag = av_context_snapshot(&state);
+    let mut system =
+        crate::llm::chat_system_prompt(&scan_result, Some(&metric_history), av_diag.as_ref());
     system.push_str(
         "\n\n# DEVICE CATALOG\nYou can run diagnostics on these configured network \
          devices by calling the `device_exec` tool. Use ONLY these host ids and \
@@ -2910,6 +2943,7 @@ pub async fn run_deep_probes(
                             reports_seen: 0,
                             leaves_seen: 0,
                             verdict: "error".to_string(),
+                            detail: None,
                             error: Some(format!("parse IgmpProbeResult: {e}")),
                         });
                     }
@@ -2922,6 +2956,7 @@ pub async fn run_deep_probes(
                         reports_seen: 0,
                         leaves_seen: 0,
                         verdict: "error".to_string(),
+                        detail: None,
                         error: Some(e),
                     });
                 }

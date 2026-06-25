@@ -632,10 +632,22 @@ fn explain_messages(scan: &ScanResult, history: Option<&MetricHistory>) -> Vec<C
 }
 
 /// Build the system message that embeds diagnostic context for interactive chat.
-fn chat_system_message(scan: &ScanResult, history: Option<&MetricHistory>) -> ChatMessage {
+/// `av` (optional) folds the most recent AV-over-IP diagnostics — Dante/AES67
+/// devices, multicast joins, PTP/IGMP/DSCP/LLDP/SAP deep probes, and AV
+/// warnings — into the same grounding context so the assistant can reason
+/// about audio-network issues, not just general Wi-Fi/LAN.
+fn chat_system_message(
+    scan: &ScanResult,
+    history: Option<&MetricHistory>,
+    av: Option<&AvDiagnosticsResult>,
+) -> ChatMessage {
     let mut sys = "You are an expert network engineer assistant helping a user troubleshoot their WiFi and LAN.\n".to_string();
     sys.push_str("Here is the current diagnostic context:\n\n");
     sys.push_str(&build_prompt(scan, history));
+    if let Some(av) = av {
+        sys.push_str("\n\n# AV-over-IP diagnostics (Dante / AES67 / PTP / multicast)\n");
+        sys.push_str(&build_av_context(av));
+    }
     sys.push_str("\n\nAnswer the user's follow-up questions concisely and precisely, referencing the above data.");
     ChatMessage {
         role: "system".into(),
@@ -646,8 +658,12 @@ fn chat_system_message(scan: &ScanResult, history: Option<&MetricHistory>) -> Ch
 /// Public accessor for the interactive-chat system prompt content. The chat
 /// agent loop in `commands.rs` builds its own message list (with tool
 /// schemas) and needs the same diagnostic context string.
-pub fn chat_system_prompt(scan: &ScanResult, history: Option<&MetricHistory>) -> String {
-    chat_system_message(scan, history).content
+pub fn chat_system_prompt(
+    scan: &ScanResult,
+    history: Option<&MetricHistory>,
+    av: Option<&AvDiagnosticsResult>,
+) -> String {
+    chat_system_message(scan, history, av).content
 }
 
 /// Public wrapper around [`dispatch`] for callers outside this module that
@@ -981,25 +997,8 @@ fn build_av_prompt(av: &AvDiagnosticsResult, scan: Option<&ScanResult>) -> Strin
         String::new(),
     ];
 
-    // Quick-look summary.
-    lines.push("## Snapshot summary".to_string());
-    lines.push(format!("  Dante devices found: {}", av.dante_devices.len()));
-    lines.push(format!("  Dante Domain Manager seen: {}", av.ddm_seen));
-    lines.push(format!("  AES67-capable devices: {}", av.aes67_seen));
-    if let Some(dp) = &av.deep_probe {
-        if let Some(igmp) = &dp.igmp {
-            lines.push(format!(
-                "  Deep IGMP probe: verdict='{}', queriers={}, reports={}",
-                igmp.verdict,
-                igmp.queriers_seen.len(),
-                igmp.reports_seen,
-            ));
-        }
-    }
-
     // Wi-Fi cross-reference (when available).
     if let Some(s) = scan {
-        lines.push(String::new());
         lines.push("## Host Wi-Fi context".to_string());
         lines.push(format!(
             "  SSID: '{}'  band/ch/width: {}/{}/{} MHz  vendor: {}",
@@ -1026,9 +1025,244 @@ fn build_av_prompt(av: &AvDiagnosticsResult, scan: Option<&ScanResult>) -> Strin
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "?".into()),
         ));
+        lines.push(String::new());
     }
 
-    // Dante devices (cap at 20 in the prompt to keep tokens bounded).
+    // Shared AV context block (snapshot summary, deep probes, Dante devices,
+    // multicast joins, and heuristic warnings). Reused verbatim by the
+    // interactive-chat system prompt so the assistant is grounded in the
+    // exact same AV facts the dedicated AV-insights panel sees.
+    lines.push(build_av_context(av));
+
+    lines.push(String::new());
+    lines.push(
+        "Respond with STRICT JSON only (no markdown, no prose outside JSON). \
+         Schema: { \"items\": [ { \"severity\": \"info|warn|critical\", \
+         \"category\": \"dante|multicast|ptp|wifi|qos|general\", \
+         \"title\": string, \"detail\": string, \"suggestion\": string } ] }. \
+         Cap at 8 items. Order by severity (critical first). Do NOT just repeat the \
+         heuristic warnings verbatim — synthesise across categories and recommend \
+         concrete switch/AP/DSP configuration changes when supportable from the data. \
+         If everything looks healthy, return one info item explaining why in 2 sentences."
+            .to_string(),
+    );
+
+    lines.join("\n")
+}
+
+/// Build the provider-neutral AV-over-IP context block: snapshot summary,
+/// every available deep-probe result (IGMP / PTP / DSCP / LLDP / link audit /
+/// SAP), the Dante/AES67 device inventory, local multicast joins, and any
+/// heuristic warnings already flagged. Shared by both the dedicated
+/// `build_av_prompt` (AV-insights panel) and the interactive-chat system
+/// prompt so the assistant is grounded in identical AV facts. No output-format
+/// instructions are included here — callers append their own.
+fn build_av_context(av: &AvDiagnosticsResult) -> String {
+    let mut lines = vec![
+        "## AV-over-IP snapshot".to_string(),
+        format!("  Dante devices found: {}", av.dante_devices.len()),
+        format!("  Dante Domain Manager seen: {}", av.ddm_seen),
+        format!("  AES67-capable devices: {}", av.aes67_seen),
+    ];
+
+    // Deep-probe results (privileged + unprivileged listeners). Each section
+    // is independently optional.
+    if let Some(dp) = &av.deep_probe {
+        // IGMP querier / snooping health.
+        if let Some(igmp) = &dp.igmp {
+            lines.push(String::new());
+            lines.push("## IGMP probe (multicast querier)".to_string());
+            lines.push(format!(
+                "  iface={} listen={}s verdict='{}' queriers={} reports={} leaves={}",
+                igmp.iface,
+                igmp.listen_secs,
+                igmp.verdict,
+                igmp.queriers_seen.len(),
+                igmp.reports_seen,
+                igmp.leaves_seen,
+            ));
+            for q in igmp.queriers_seen.iter().take(4) {
+                lines.push(format!(
+                    "    - querier {} (IGMPv{}, max_resp={}ds, group {})",
+                    q.from, q.version, q.max_resp_ds, q.group,
+                ));
+            }
+            if let Some(d) = &igmp.detail {
+                lines.push(format!("  interpretation: {d}"));
+            }
+            if let Some(e) = &igmp.error {
+                lines.push(format!("    error: {e}"));
+            }
+        }
+
+        // PTP grandmaster / sync quality.
+        if let Some(ptp) = &dp.ptp {
+            lines.push(String::new());
+            lines.push("## PTP probe (IEEE 1588 sync)".to_string());
+            lines.push(format!(
+                "  iface={} listen={}s verdict='{}' grandmasters={} competing_gm={}",
+                ptp.iface,
+                ptp.listen_secs,
+                ptp.verdict,
+                ptp.grandmaster_count,
+                ptp.competing_gm_observed,
+            ));
+            for dom in ptp.domains.iter().take(4) {
+                let jitter = dom
+                    .sync_jitter_us
+                    .map(|j| format!("{j:.0}µs"))
+                    .unwrap_or_else(|| "?".into());
+                lines.push(format!(
+                    "    - domain {} (PTPv{}, {} profile, {}): {} GM(s), sync_arrivals={}, jitter={}",
+                    dom.domain_number,
+                    dom.version,
+                    dom.profile,
+                    dom.transport,
+                    dom.grandmasters.len(),
+                    dom.sync_arrivals,
+                    jitter,
+                ));
+                for gm in dom.grandmasters.iter().take(3) {
+                    lines.push(format!(
+                        "        GM {} class={} prio1={} prio2={} announces={} from {}",
+                        gm.clock_identity,
+                        gm.clock_class,
+                        gm.priority1,
+                        gm.priority2,
+                        gm.announces_seen,
+                        gm.source_ip,
+                    ));
+                }
+            }
+            if let Some(e) = &ptp.error {
+                lines.push(format!("    error: {e}"));
+            }
+        }
+
+        // DSCP / QoS marking audit.
+        if let Some(dscp) = &dp.dscp {
+            lines.push(String::new());
+            lines.push("## DSCP / QoS audit".to_string());
+            lines.push(format!(
+                "  iface={} listen={}s verdict='{}'",
+                dscp.iface, dscp.listen_secs, dscp.verdict,
+            ));
+            for o in dscp.observations.iter().take(8) {
+                let mark = if o.dscp_median == o.dscp_expected {
+                    "ok"
+                } else {
+                    "MISMATCH"
+                };
+                lines.push(format!(
+                    "    - {} ({}): dscp {}→expected {} [{}], ttl med={} min={}, {} pkts",
+                    o.stream_kind,
+                    o.dst_group,
+                    o.dscp_median,
+                    o.dscp_expected,
+                    mark,
+                    o.ttl_median,
+                    o.ttl_min,
+                    o.packets,
+                ));
+            }
+            if let Some(e) = &dscp.error {
+                lines.push(format!("    error: {e}"));
+            }
+        }
+
+        // LLDP / CDP upstream switch identification.
+        if let Some(lldp) = &dp.lldp {
+            lines.push(String::new());
+            lines.push("## LLDP / CDP neighbours (upstream switch)".to_string());
+            lines.push(format!(
+                "  iface={} mechanism={} verdict='{}' neighbours={}",
+                lldp.iface,
+                lldp.mechanism,
+                lldp.verdict,
+                lldp.neighbors.len(),
+            ));
+            for n in lldp.neighbors.iter().take(4) {
+                lines.push(format!(
+                    "    - {} via {} | port={} | vlan={} | name={} | desc={}",
+                    n.source_mac,
+                    n.via,
+                    n.port_id.as_deref().unwrap_or("?"),
+                    n.vlan_id
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    n.system_name.as_deref().unwrap_or("?"),
+                    n.system_description.as_deref().unwrap_or("?"),
+                ));
+            }
+            if let Some(e) = &lldp.error {
+                lines.push(format!("    error: {e}"));
+            }
+        }
+
+        // Per-NIC link audit (EEE / duplex / flow-control / MTU).
+        if let Some(la) = &dp.link_audit {
+            lines.push(String::new());
+            lines.push("## NIC link audit".to_string());
+            lines.push(format!(
+                "  iface={} verdict='{}' speed={} duplex={} eee={} flow_rx={} flow_tx={} mtu={}",
+                la.iface,
+                la.verdict,
+                la.link_speed_mbps
+                    .map(|s| format!("{s}Mb"))
+                    .unwrap_or_else(|| "?".into()),
+                la.duplex.as_deref().unwrap_or("?"),
+                la.eee_enabled
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                la.flow_control_rx
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                la.flow_control_tx
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                la.mtu.map(|m| m.to_string()).unwrap_or_else(|| "?".into()),
+            ));
+            for issue in la.issues.iter().take(6) {
+                lines.push(format!("    - {issue}"));
+            }
+        }
+
+        // SAP/SDP advertised AES67 streams.
+        if let Some(sap) = &dp.sap {
+            lines.push(String::new());
+            lines.push("## SAP/SDP advertised streams (AES67)".to_string());
+            lines.push(format!(
+                "  iface={} listen={}s verdict='{}' streams={}",
+                sap.iface,
+                sap.listen_secs,
+                sap.verdict,
+                sap.streams.len(),
+            ));
+            for st in sap.streams.iter().take(8) {
+                lines.push(format!(
+                    "    - '{}' grp={}:{} sr={} ch={} ptime={} from {}",
+                    st.session_name,
+                    st.multicast_group.as_deref().unwrap_or("?"),
+                    st.port.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+                    st.sample_rate_hz
+                        .map(|r| format!("{r}Hz"))
+                        .unwrap_or_else(|| "?".into()),
+                    st.channels
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    st.ptime_ms
+                        .map(|p| format!("{p}ms"))
+                        .unwrap_or_else(|| "?".into()),
+                    st.source_ip,
+                ));
+            }
+            if let Some(e) = &sap.error {
+                lines.push(format!("    error: {e}"));
+            }
+        }
+    }
+
+    // Dante / AES67 device inventory (cap at 20 to keep tokens bounded).
     if !av.dante_devices.is_empty() {
         lines.push(String::new());
         lines.push(format!(
@@ -1087,27 +1321,15 @@ fn build_av_prompt(av: &AvDiagnosticsResult, scan: Option<&ScanResult>) -> Strin
     // build on rather than re-derive.
     if !av.warnings.is_empty() {
         lines.push(String::new());
-        lines.push("## Heuristic warnings already flagged".to_string());
+        lines.push("## Heuristic AV warnings already flagged".to_string());
         for w in &av.warnings {
             lines.push(format!("  [{}/{}] {}", w.severity, w.category, w.message));
         }
     }
 
-    lines.push(String::new());
-    lines.push(
-        "Respond with STRICT JSON only (no markdown, no prose outside JSON). \
-         Schema: { \"items\": [ { \"severity\": \"info|warn|critical\", \
-         \"category\": \"dante|multicast|ptp|wifi|qos|general\", \
-         \"title\": string, \"detail\": string, \"suggestion\": string } ] }. \
-         Cap at 8 items. Order by severity (critical first). Do NOT just repeat the \
-         heuristic warnings verbatim — synthesise across categories and recommend \
-         concrete switch/AP/DSP configuration changes when supportable from the data. \
-         If everything looks healthy, return one info item explaining why in 2 sentences."
-            .to_string(),
-    );
-
     lines.join("\n")
 }
+
 /// Answer a follow-up question in the context of the current scan result.
 /// `history` is alternating user/assistant messages (not including the new question).
 #[allow(clippy::too_many_arguments)]
@@ -1118,10 +1340,11 @@ pub async fn chat_query(
     base_url: Option<&str>,
     scan: &ScanResult,
     metric_history: Option<&MetricHistory>,
+    av: Option<&AvDiagnosticsResult>,
     history: Vec<ChatMessage>,
     question: &str,
 ) -> Result<String> {
-    let mut messages = vec![chat_system_message(scan, metric_history)];
+    let mut messages = vec![chat_system_message(scan, metric_history, av)];
     messages.extend(history);
     messages.push(ChatMessage {
         role: "user".into(),

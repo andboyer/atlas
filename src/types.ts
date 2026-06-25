@@ -482,7 +482,7 @@ export interface DanteDevice {
 export interface MulticastGroup {
   iface: string;
   group: string;
-  /** One of "dante_audio" | "ptp" | "mdns" | "ssdp" | "control" | "link_local" | "other". */
+  /** One of "dante_audio" | "audio" | "dante_clocking" | "ptp" | "mdns" | "ssdp" | "control" | "link_local" | "other". */
   purpose: string;
 }
 
@@ -527,6 +527,8 @@ export interface IgmpProbeResult {
   leaves_seen: number;
   /** "querier_present" | "no_querier_observed" | "silent" | "not_implemented" | "error". */
   verdict: string;
+  /** Segment-aware interpretation correlating the verdict with joined scoped groups. */
+  detail: string | null;
   error: string | null;
 }
 

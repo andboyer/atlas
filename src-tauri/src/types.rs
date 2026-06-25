@@ -521,8 +521,8 @@ pub struct DanteDevice {
 pub struct MulticastGroup {
     pub iface: String,
     pub group: String,
-    /// `"dante_audio"` | `"ptp"` | `"mdns"` | `"ssdp"` | `"control"` |
-    /// `"link_local"` | `"other"`.
+    /// `"dante_audio"` | `"audio"` | `"dante_clocking"` | `"ptp"` | `"mdns"` |
+    /// `"ssdp"` | `"control"` | `"link_local"` | `"other"`.
     pub purpose: String,
 }
 
@@ -576,6 +576,12 @@ pub struct IgmpProbeResult {
     pub leaves_seen: u32,
     /// `"querier_present"` | `"no_querier_observed"` | `"silent"` | `"error"`.
     pub verdict: String,
+    /// Segment-aware, human-readable interpretation of the verdict. Correlates
+    /// the probe outcome with the routed/scoped multicast groups this host has
+    /// joined on `iface` so a bare `silent` becomes an actionable finding
+    /// (e.g. "joined N audio groups but no querier on THIS VLAN → snooping will
+    /// prune them"). `None` only on serialisation/transport fallbacks.
+    pub detail: Option<String>,
     pub error: Option<String>,
 }
 

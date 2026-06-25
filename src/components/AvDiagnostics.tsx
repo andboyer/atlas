@@ -721,6 +721,11 @@ function IgmpProbePanel({
       ) : (
         <div className="space-y-2 text-xs">
           <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          {result.detail && (
+            <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2 leading-relaxed text-[var(--color-muted)]">
+              {result.detail}
+            </p>
+          )}
           <div className="text-[11px] text-[var(--color-muted)]">
             iface <code>{result.iface}</code> · {result.queriers_seen.length}{" "}
             querier(s), {result.reports_seen} report(s),{" "}

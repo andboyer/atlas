@@ -110,6 +110,7 @@ fn run_igmp_listen(args: &[String]) -> i32 {
             reports_seen: 0,
             leaves_seen: 0,
             verdict: "error".to_string(),
+            detail: None,
             error: Some(e.to_string()),
         },
     };
@@ -214,6 +215,8 @@ fn listen_for_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<IgmpProbeRes
         "silent"
     };
 
+    let detail = build_igmp_detail(iface, verdict, &queriers, listen_secs);
+
     Ok(IgmpProbeResult {
         iface: iface.to_string(),
         listen_secs,
@@ -221,8 +224,93 @@ fn listen_for_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<IgmpProbeRes
         reports_seen: reports,
         leaves_seen: leaves,
         verdict: verdict.to_string(),
+        detail,
         error: None,
     })
+}
+
+/// Build a segment-aware, human-readable interpretation of the IGMP verdict
+/// by correlating it with the routed/scoped multicast groups this host has
+/// joined on `iface`. Link-local `224.0.0.0/24` groups are excluded because
+/// they are always flooded and never depend on a querier — so seeing them
+/// (Dante ConMon, mDNS) does not imply audio/PTP is being delivered.
+///
+/// This turns a bare `silent` / `no_querier_observed` verdict into an
+/// actionable finding: a host can join Dante audio + PTP groups yet receive
+/// nothing because the only querier lives on a different VLAN.
+fn build_igmp_detail(
+    iface: &str,
+    verdict: &str,
+    queriers: &[IgmpQuerier],
+    listen_secs: u32,
+) -> Option<String> {
+    // Joined groups on this interface that REQUIRE a querier to be forwarded
+    // (everything outside link-local 224.0.0.0/24).
+    let scoped: Vec<(String, String)> = crate::probes::multicast::collect_blocking()
+        .into_iter()
+        .filter(|m| m.iface == iface)
+        .flat_map(|m| m.groups)
+        .filter(|g| {
+            g.group
+                .parse::<Ipv4Addr>()
+                .map(|ip| {
+                    let o = ip.octets();
+                    !(o[0] == 224 && o[1] == 0 && o[2] == 0)
+                })
+                .unwrap_or(false)
+        })
+        .map(|g| (g.group, g.purpose))
+        .collect();
+
+    let audio_n = scoped
+        .iter()
+        .filter(|(_, p)| crate::probes::multicast::is_audio_purpose(p))
+        .count();
+    let sample = scoped
+        .iter()
+        .take(4)
+        .map(|(g, p)| format!("{g} [{p}]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    match verdict {
+        "querier_present" => {
+            let who = queriers
+                .first()
+                .map(|q| q.from.clone())
+                .unwrap_or_else(|| "?".to_string());
+            Some(format!(
+                "IGMP querier {who} is active on {iface}; snooping switches will keep the \
+                 {} joined scoped group(s) forwarded to this port.",
+                scoped.len()
+            ))
+        }
+        "no_querier_observed" | "silent" if !scoped.is_empty() => Some(format!(
+            "No IGMP querier seen on {iface} during {listen_secs}s, yet this host has joined {} \
+             routed/scoped multicast group(s){} ({sample}). Without a querier on THIS segment, \
+             IGMP snooping ages these out (~260s) and stops delivering them to the port — AVoIP \
+             audio/PTP will drop even though the control plane (mDNS / Dante ConMon) looks \
+             healthy. A querier on a different VLAN does not serve this segment; enable an IGMP \
+             querier on this VLAN's L3 device.",
+            scoped.len(),
+            if audio_n > 0 {
+                format!(" ({audio_n} carrying audio)")
+            } else {
+                String::new()
+            }
+        )),
+        "no_querier_observed" => Some(format!(
+            "IGMP reports/leaves were seen on {iface} but no General Query in {listen_secs}s — the \
+             querier election is missing or broken on this segment. Any scoped multicast joined \
+             later will be pruned by snooping."
+        )),
+        "silent" => Some(format!(
+            "No IGMP traffic and no routed/scoped multicast joins on {iface} during {listen_secs}s. \
+             If this is the AV NIC, confirm it is the correct interface and attached to the audio \
+             VLAN; otherwise the segment simply has no multicast subscribers yet."
+        )),
+        _ => None,
+    }
 }
 
 /// Parsed IPv4 + IGMP packet view.

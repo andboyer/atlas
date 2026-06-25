@@ -105,8 +105,12 @@ fn parse_netstat_g(stdout: &str) -> Vec<InterfaceMulticast> {
     let mut out: Vec<InterfaceMulticast> = by_iface
         .into_iter()
         .map(|(iface, groups)| {
+            // Count both the Dante default (239.69) and the broader org-local
+            // audio range (239.192) as audio flows — networks that re-home
+            // Dante or run Q-SYS/AES67 off the default range otherwise look
+            // like "control plane up, audio plane dead".
             let dante_audio_groups =
-                groups.iter().filter(|g| g.purpose == "dante_audio").count() as u32;
+                groups.iter().filter(|g| is_audio_purpose(&g.purpose)).count() as u32;
             let ptp_groups = groups.iter().filter(|g| g.purpose == "ptp").count() as u32;
             InterfaceMulticast {
                 iface,
@@ -142,6 +146,13 @@ pub fn classify_group(addr: &str) -> String {
         if octets[3] == 251 {
             return "mdns".to_string();
         }
+        // Audinate/Dante use 224.0.0.230-233 for clocking + ConMon
+        // (device discovery / monitoring). These are link-local and always
+        // flooded, so seeing them does NOT prove a querier — but it does
+        // confirm Dante is live on the segment.
+        if (230..=233).contains(&octets[3]) {
+            return "dante_clocking".to_string();
+        }
         return "link_local".to_string();
     }
 
@@ -165,12 +176,27 @@ pub fn classify_group(addr: &str) -> String {
         return "mdns".to_string();
     }
 
+    // Organization-local scope 239.192.0.0/16 (RFC 2365). Dante can be
+    // configured off its 239.69 default onto this range, and several other
+    // AVoIP systems (Q-SYS, some AES67 senders) emit audio flows here, so we
+    // treat it as likely audio rather than generic control.
+    if octets[0] == 239 && octets[1] == 192 {
+        return "audio".to_string();
+    }
+
     // Administratively-scoped 239/8 catch-all (often vendor-specific control).
     if octets[0] == 239 {
         return "control".to_string();
     }
 
     "other".to_string()
+}
+
+/// Multicast group purposes that carry (or are configured to carry) AVoIP
+/// audio flows — i.e. groups that REQUIRE the snooping switch to forward
+/// them to a subscribed port, and therefore stall when no querier exists.
+pub fn is_audio_purpose(purpose: &str) -> bool {
+    matches!(purpose, "dante_audio" | "audio")
 }
 
 #[cfg(test)]
@@ -182,11 +208,19 @@ mod tests {
         assert_eq!(classify_group("224.0.0.1"), "link_local");
         assert_eq!(classify_group("224.0.0.251"), "mdns");
         assert_eq!(classify_group("224.0.0.107"), "ptp");
+        assert_eq!(classify_group("224.0.0.230"), "dante_clocking");
+        assert_eq!(classify_group("224.0.0.233"), "dante_clocking");
         assert_eq!(classify_group("224.0.1.129"), "ptp");
         assert_eq!(classify_group("239.69.10.5"), "dante_audio");
+        assert_eq!(classify_group("239.192.243.243"), "audio");
         assert_eq!(classify_group("239.255.255.250"), "ssdp");
         assert_eq!(classify_group("239.1.2.3"), "control");
         assert_eq!(classify_group("garbage"), "other");
+
+        assert!(is_audio_purpose("dante_audio"));
+        assert!(is_audio_purpose("audio"));
+        assert!(!is_audio_purpose("control"));
+        assert!(!is_audio_purpose("dante_clocking"));
     }
 
     #[test]
