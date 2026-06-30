@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Network,
   Radio,
-  Cpu,
   History,
   Download,
   Settings as SettingsIcon,
@@ -21,7 +20,6 @@ import { KpiRow } from "./components/KpiRow";
 import { Tabs } from "./components/Tabs";
 import { NicPicker } from "./components/NicPicker";
 import { FindingsList } from "./components/FindingsList";
-import { DeviceList } from "./components/DeviceList";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { IncidentTimeline } from "./components/IncidentTimeline";
 import { ServiceStatus } from "./components/ServiceStatus";
@@ -32,7 +30,7 @@ import AssistantDock from "./components/AssistantDock";
 import { AiExplanation } from "./components/AiExplanation";
 import { RadioInsights } from "./components/RadioInsights";
 import { AvDiagnostics } from "./components/AvDiagnostics";
-import OnboardingWizard from "./components/OnboardingWizard";
+import { OllamaBanner } from "./components/OllamaBanner";
 import UpdateBanner from "./components/UpdateBanner";
 import QualityPanel from "./components/QualityPanel";
 import PhyEfficiencyBadge from "./components/PhyEfficiencyBadge";
@@ -73,7 +71,7 @@ const LEGACY_TAB_MAP: Record<string, { group: GroupId; sub: string }> = {
   runbooks: { group: "avfleet", sub: "runbooks" },
   fleet: { group: "avfleet", sub: "fleet" },
   devices: { group: "network", sub: "devices" },
-  scanner: { group: "network", sub: "scanner" },
+  scanner: { group: "network", sub: "devices" },
   activity: { group: "activity", sub: "timeline" },
   tools: { group: "activity", sub: "tools" },
   assistant: { group: "home", sub: "summary" },
@@ -150,8 +148,6 @@ function SectionHeading({
 function App() {
   const monitoring = useApp((s) => s.monitoring);
   const lastScan = useApp((s) => s.lastScan);
-  const settings = useApp((s) => s.settings);
-  const settingsLoaded = useApp((s) => s.settingsLoaded);
   const loadSettings = useApp((s) => s.loadSettings);
   const subscribeToScanEvents = useApp((s) => s.subscribeToScanEvents);
   const subscribeToLiveMetrics = useApp((s) => s.subscribeToLiveMetrics);
@@ -328,7 +324,6 @@ function App() {
       subs: [
         { id: "health", label: "Path & WAN" },
         { id: "devices", label: "Devices", badge: devicesCount },
-        { id: "scanner", label: "IP Scanner" },
       ],
     },
     {
@@ -358,6 +353,7 @@ function App() {
   return (
     <div className="min-h-screen">
       <UpdateBanner />
+      <OllamaBanner onOpenSettings={() => setShowSettings(true)} />
       <header className="sticky top-0 z-30 border-b border-[var(--color-border)] bg-[var(--color-bg)]/85 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-8 py-4">
           <div className="flex items-center gap-3">
@@ -531,16 +527,8 @@ function App() {
                 )}
                 {activeGroup === "network" && activeSub === "devices" && (
                   <section>
-                    <SectionHeading icon={<Cpu className="h-3.5 w-3.5" />}>
-                      Devices on this network
-                    </SectionHeading>
-                    <DeviceList />
-                  </section>
-                )}
-                {activeGroup === "network" && activeSub === "scanner" && (
-                  <section>
                     <SectionHeading icon={<ScanSearch className="h-3.5 w-3.5" />}>
-                      IP Scanner
+                      Devices on this network
                     </SectionHeading>
                     <IpScannerPanel />
                   </section>
@@ -622,10 +610,6 @@ function App() {
       </main>
 
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
-
-      {settingsLoaded && !settings?.onboarding_complete && (
-        <OnboardingWizard onComplete={() => loadSettings()} />
-      )}
 
       <ApprovalModal />
     </div>

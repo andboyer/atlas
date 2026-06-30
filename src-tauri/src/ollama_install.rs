@@ -433,8 +433,8 @@ async fn install_ollama_impl(progress: &Channel<InstallProgress>) -> Result<()> 
         if let Err(e) = pull_default_model(progress).await {
             let _ = progress.send(InstallProgress::Installing {
                 step: format!(
-                    "Ollama installed. Couldn't auto-pull llama3 ({e}); \
-                     run `ollama pull llama3` once the daemon is up."
+                    "Ollama installed. Couldn't auto-pull {DEFAULT_MODEL} ({e}); \
+                     run `ollama pull {DEFAULT_MODEL}` once the daemon is up."
                 ),
             });
         }
@@ -456,13 +456,19 @@ async fn install_ollama_impl(progress: &Channel<InstallProgress>) -> Result<()> 
     Ok(())
 }
 
-/// After the daemon comes up, run the equivalent of `ollama pull llama3`
+/// The Ollama model Atlas treats as its default — auto-pulled right after
+/// install and used whenever the user hasn't picked a specific model in
+/// Settings. qwen2.5 is chosen because it's tool-capable (the agentic chat
+/// relies on function calling) and broadly capable for the narrator/insights.
+pub const DEFAULT_MODEL: &str = "qwen2.5:7b";
+
+/// After the daemon comes up, run the equivalent of `ollama pull <DEFAULT_MODEL>`
 /// over the HTTP API so the user has a working model immediately. Waits
 /// up to ~30s for the daemon to bind `:11434`, then streams the pull and
 /// emits coarse progress as `InstallProgress::Installing` steps (≤4/sec).
 #[cfg(target_os = "macos")]
 async fn pull_default_model(progress: &Channel<InstallProgress>) -> Result<()> {
-    const MODEL: &str = "llama3";
+    const MODEL: &str = DEFAULT_MODEL;
     const BASE: &str = "http://127.0.0.1:11434";
 
     // 1. Wait for the daemon to answer /api/version (up to ~30s).

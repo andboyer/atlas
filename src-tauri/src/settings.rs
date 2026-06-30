@@ -62,10 +62,13 @@ impl Default for Settings {
             monitoring_enabled: true,
             notifications_enabled: true,
             notification_min_severity: "medium".to_string(),
-            llm_provider: None,
+            // Default to local Ollama + qwen so the app works out of the box
+            // without an API key (the AI dock shows an "install Ollama" banner
+            // until the daemon is up).
+            llm_provider: Some("ollama".to_string()),
             llm_api_key: None,
-            llm_model: None,
-            llm_base_url: None,
+            llm_model: Some(crate::ollama_install::DEFAULT_MODEL.to_string()),
+            llm_base_url: Some("http://127.0.0.1:11434".to_string()),
             industry_profile: "home".to_string(),
             watchlist: vec![],
             pos_targets: vec![],

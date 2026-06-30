@@ -614,7 +614,7 @@ pub async fn explain_findings(
 ) -> Result<String, String> {
     let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
 
-    let provider = settings.llm_provider.as_deref().unwrap_or("openai");
+    let provider = settings.llm_provider.as_deref().unwrap_or("ollama");
     let api_key = resolve_api_key(provider, settings.llm_api_key.clone())?;
     let model = settings
         .llm_model
@@ -646,7 +646,7 @@ pub async fn radio_insights(
 ) -> Result<String, String> {
     let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
 
-    let provider = settings.llm_provider.as_deref().unwrap_or("openai");
+    let provider = settings.llm_provider.as_deref().unwrap_or("ollama");
     let api_key = resolve_api_key(provider, settings.llm_api_key.clone())?;
     let model = settings
         .llm_model
@@ -708,7 +708,7 @@ pub async fn chat_query(
 ) -> Result<String, String> {
     let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
 
-    let provider = settings.llm_provider.as_deref().unwrap_or("openai");
+    let provider = settings.llm_provider.as_deref().unwrap_or("ollama");
     let api_key = resolve_api_key(provider, settings.llm_api_key.clone())?;
     let model = settings
         .llm_model
@@ -766,7 +766,7 @@ pub async fn chat_agent(
     let provider = settings
         .llm_provider
         .as_deref()
-        .unwrap_or("openai")
+        .unwrap_or("ollama")
         .to_string();
     let api_key = resolve_api_key(&provider, settings.llm_api_key.clone())?;
     let model = settings
@@ -1199,7 +1199,7 @@ pub fn get_payload_preview(scan_result: ScanResult) -> String {
 fn default_model(provider: &str) -> String {
     match provider {
         "anthropic" => "claude-3-haiku-20240307".to_string(),
-        "ollama" => "llama3".to_string(),
+        "ollama" => crate::ollama_install::DEFAULT_MODEL.to_string(),
         _ => "gpt-4o-mini".to_string(),
     }
 }
@@ -3059,7 +3059,7 @@ pub async fn av_insights(
     scan_result: Option<ScanResult>,
 ) -> Result<String, String> {
     let settings = Settings::load(&state.settings_path).map_err(|e| e.to_string())?;
-    let provider = settings.llm_provider.as_deref().unwrap_or("openai");
+    let provider = settings.llm_provider.as_deref().unwrap_or("ollama");
     let api_key = resolve_api_key(provider, settings.llm_api_key.clone())?;
     let model = settings
         .llm_model
