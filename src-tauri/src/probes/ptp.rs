@@ -77,12 +77,13 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
     }
 
     // Concurrently capture L2 PTP (IEEE-1588 over Ethernet, ethertype
-    // 0x88F7 — used by SMPTE 2110 / AVB gPTP) via BPF on macOS. The UDP
-    // sockets above only see PTP-over-UDP, so without this an L2-only
-    // grandmaster would be invisible. Best-effort: opening /dev/bpf needs
-    // root, so an unprivileged probe simply yields no L2 records and falls
-    // back to the L3 path alone.
-    #[cfg(target_os = "macos")]
+    // 0x88F7 — used by SMPTE 2110 / AVB gPTP). The UDP sockets above only
+    // see PTP-over-UDP, so without this an L2-only grandmaster would be
+    // invisible. macOS uses /dev/bpf; Windows uses Npcap (wpcap.dll).
+    // Best-effort on both: BPF needs root and Npcap needs the driver
+    // installed, and when neither is available the probe simply yields no
+    // L2 records and falls back to the L3 path alone.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let l2_handle = {
         let iface = iface.to_string();
         std::thread::spawn(move || capture_l2_ptp(&iface, listen_secs))
@@ -120,8 +121,9 @@ fn listen_for_ptp(iface: &str, listen_secs: u32) -> anyhow::Result<PtpProbeResul
         }
     }
 
-    // Fold in any L2 PTP messages the BPF thread captured (macOS).
-    #[cfg(target_os = "macos")]
+    // Fold in any L2 PTP messages the capture thread collected (macOS BPF
+    // or Windows Npcap).
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Ok(records) = l2_handle.join() {
         for rec in records {
             record_ptp(&mut by_key, &rec.msg, rec.is_event, rec.src, rec.at);
@@ -427,17 +429,19 @@ fn parse_ptp(data: &[u8]) -> Option<ParsedPtp> {
     })
 }
 
-// ─── macOS L2 PTP (ethertype 0x88F7) capture via BPF ─────────────────────
+// ─── L2 PTP (ethertype 0x88F7) capture ───────────────────────────────────
 //
 // PTP can run directly over Ethernet (IEEE 1588 Annex F / IEEE 802.1AS
 // gPTP) instead of UDP/IPv4 — common on SMPTE 2110 / AVB media networks.
-// The UDP sockets in `listen_for_ptp` can't see those frames, so on macOS
-// we also capture at the datalink layer with a kernel-side "ethertype ==
-// 0x88F7" BPF filter (exactly what tcpdump compiles for `ether proto
-// 0x88f7`). Requires root to open /dev/bpf; unprivileged callers get no
-// L2 records and rely on the L3 path alone.
+// The UDP sockets in `listen_for_ptp` can't see those frames, so we also
+// capture at the datalink layer with an "ethertype == 0x88F7" filter:
+//   * macOS   — /dev/bpf (root required; what tcpdump uses for
+//               `ether proto 0x88f7`).
+//   * Windows — Npcap / wpcap.dll (driver install required).
+// Unprivileged callers (no root / no Npcap) get no L2 records and rely on
+// the L3 path alone.
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 struct L2Record {
     msg: ParsedPtp,
     at: Instant,
@@ -450,6 +454,33 @@ fn capture_l2_ptp(iface: &str, listen_secs: u32) -> Vec<L2Record> {
     // Best-effort: /dev/bpf is root-only on stock macOS, so an unprivileged
     // probe yields no L2 records (the L3 UDP path still runs).
     capture_l2_ptp_inner(iface, listen_secs).unwrap_or_default()
+}
+
+/// Windows: capture L2 PTP via Npcap. Resolves the interface's IPv4 to pick
+/// the matching `\Device\NPF_{GUID}`, installs an "ethertype 0x88F7" filter
+/// (incl. one 802.1Q tag), and parses each frame with the shared
+/// `parse_l2_ptp`. Best-effort — yields no records if Npcap isn't installed.
+#[cfg(target_os = "windows")]
+fn capture_l2_ptp(iface: &str, listen_secs: u32) -> Vec<L2Record> {
+    let iface_ipv4 = iface_probe::find_by_name(iface)
+        .and_then(|i| i.ipv4)
+        .and_then(|s| s.parse::<Ipv4Addr>().ok());
+    let mut records: Vec<L2Record> = Vec::new();
+    // libpcap can't express "0x88F7 over an optional VLAN tag" in one
+    // primitive, so OR the untagged and tagged forms.
+    let filter = "ether proto 0x88f7 or (vlan and ether proto 0x88f7)";
+    let _ = crate::probes::npcap::capture_l2(iface_ipv4, filter, listen_secs, |frame| {
+        if let Some((msg, src)) = parse_l2_ptp(frame) {
+            let is_event = matches!(msg.kind, PtpKind::Sync);
+            records.push(L2Record {
+                msg,
+                at: Instant::now(),
+                src,
+                is_event,
+            });
+        }
+    });
+    records
 }
 
 #[cfg(target_os = "macos")]
@@ -634,8 +665,9 @@ fn install_ptp_l2_filter(fd: libc::c_int, biocsetf: libc::c_ulong) -> std::io::R
 
 /// Strip the Ethernet (and optional single 802.1Q tag) header and parse
 /// the PTP header that follows. Returns the parsed message plus the
-/// sender's MAC formatted as the source identity.
-#[cfg(target_os = "macos")]
+/// sender's MAC formatted as the source identity. Shared by the macOS BPF
+/// and Windows Npcap L2 capture paths.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn parse_l2_ptp(frame: &[u8]) -> Option<(ParsedPtp, String)> {
     if frame.len() < 14 {
         return None;

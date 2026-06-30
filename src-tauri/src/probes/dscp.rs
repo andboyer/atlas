@@ -19,11 +19,13 @@
 //! ## Platform notes
 //!   * **macOS / Linux** — IP_RECVTOS + IP_RECVTTL via `libc::recvmsg`
 //!     with cmsg parsing. Unprivileged.
-//!   * **Windows** — `IP_RECVTOS` exists on Win10+ but cmsg retrieval
-//!     requires `WSARecvMsg` which is not in `std::net`. For v1 we
-//!     accept Windows DSCP capture without TOS/TTL (reports 0/0 with a
-//!     note in the verdict) — the multicast presence is still useful as
-//!     a "is the stream reaching this NIC at all" signal.
+//!   * **Windows** — IP_RECVTOS + IP_RECVTTL via the `WSARecvMsg`
+//!     extension function (resolved at runtime through
+//!     `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER)`), with cmsg
+//!     parsing. Requires Win10+ for DSCP; if the extension can't be
+//!     resolved we fall back to a plain read and report
+//!     `qos_unavailable_on_platform` so a 0/0 result is never mistaken
+//!     for "DSCP stripped".
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -134,10 +136,11 @@ fn audit(iface: &str, listen_secs: u32) -> anyhow::Result<DscpProbeResult> {
 
     let verdict = if observations.is_empty() {
         "silent".to_string()
-    } else if cfg!(target_os = "windows") {
-        // Windows v1 can't read IP_TOS/IP_TTL from UDP recv without
-        // WSARecvMsg. Surface this honestly so operators don't trust
-        // the dscp_median=0 result as a real "QoS stripped" finding.
+    } else if !ancillary_supported() {
+        // Windows only: the WSARecvMsg extension didn't resolve (pre-Win10
+        // / unusual provider), so we captured the streams but no DSCP/TTL
+        // markings. Surface this honestly rather than reading the zero-fill
+        // as a real "QoS stripped" finding.
         "qos_unavailable_on_platform".to_string()
     } else {
         let mut preserved = 0u32;
@@ -195,11 +198,14 @@ fn open_socket(iface_v4: Ipv4Addr, port: u16, groups: &[Ipv4Addr]) -> std::io::R
     for grp in groups {
         let _ = sock.join_multicast_v4(grp, &iface_v4);
     }
-    // Best-effort enable IP_RECVTOS / IP_RECVTTL. macOS + Linux honour
-    // these; Windows ignores them on plain recv_from and would need
-    // WSARecvMsg to surface the cmsg.
+    // Enable IP_RECVTOS / IP_RECVTTL so every datagram's DSCP + TTL arrive
+    // as ancillary (control) data. macOS + Linux read it back via
+    // `recvmsg`; Windows reads it via the `WSARecvMsg` extension function,
+    // which is resolved (once) inside `win_tos::enable_tos_ttl`.
     #[cfg(unix)]
     enable_tos_ttl(&sock)?;
+    #[cfg(windows)]
+    win_tos::enable_tos_ttl(&sock);
     Ok(sock)
 }
 
@@ -298,25 +304,305 @@ fn recv_with_tos_ttl(sock: &Socket) -> std::io::Result<Option<(Option<Ipv4Addr>,
 
 #[cfg(windows)]
 fn recv_with_tos_ttl(sock: &Socket) -> std::io::Result<Option<(Option<Ipv4Addr>, Sample)>> {
-    let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 2048];
-    match sock.recv_from(&mut buf) {
-        Ok((_n, from)) => {
-            let dst = from.as_socket_ipv4().map(|a| *a.ip());
-            // Windows TOS/TTL not retrieved (WSARecvMsg path not wired
-            // in v1). Surface zeros — verdict layer flags
-            // "qos_unavailable_on_platform" so operators don't
-            // misread these as "DSCP stripped to 0".
-            Ok(Some((dst, Sample { dscp: 0, ttl: 0 })))
+    win_tos::recv(sock)
+}
+
+/// Whether DSCP/TTL ancillary data is actually retrievable on this
+/// platform/run. Always true on Unix (`recvmsg`); on Windows it depends
+/// on the `WSARecvMsg` extension having resolved during socket setup.
+#[cfg(not(windows))]
+fn ancillary_supported() -> bool {
+    true
+}
+#[cfg(windows)]
+fn ancillary_supported() -> bool {
+    win_tos::supported()
+}
+
+/// Windows DSCP/TTL capture via the `WSARecvMsg` extension function.
+///
+/// `recv_from` on a plain UDP socket discards the IP header, so the only
+/// way to read the per-datagram TOS byte (DSCP) and TTL on Windows is the
+/// `WSARecvMsg` extension (the Win32 analogue of POSIX `recvmsg`). The
+/// function pointer isn't exported from `ws2_32.dll` directly — it must be
+/// resolved at runtime via `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER,
+/// WSAID_WSARECVMSG)`. We resolve it once (cached) when the first socket
+/// is created and then parse the returned control messages for `IP_TOS`
+/// and `IP_TTL`.
+///
+/// All structs/constants are declared locally (rather than pulled from
+/// `windows-sys`) so the layout is explicit and the module is
+/// self-contained; the only external symbols are the rock-stable
+/// `ws2_32` imports below. Targets the x86_64 Windows ABI.
+#[cfg(windows)]
+mod win_tos {
+    use super::Sample;
+    use socket2::Socket;
+    use std::net::Ipv4Addr;
+    use std::os::raw::c_void;
+    use std::os::windows::io::AsRawSocket;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    type Socket_ = usize; // SOCKET
+    const SOCKET_ERROR: i32 = -1;
+    const IPPROTO_IP: i32 = 0;
+    const IP_TOS: i32 = 3;
+    const IP_TTL: i32 = 4;
+    const IP_RECVTTL: i32 = 21;
+    const IP_RECVTOS: i32 = 40;
+    const SIO_GET_EXTENSION_FUNCTION_POINTER: u32 = 0xC800_0006;
+    const WSAEWOULDBLOCK: i32 = 10035;
+    const WSAETIMEDOUT: i32 = 10060;
+    const AF_INET: u16 = 2;
+    /// `WSAID_WSARECVMSG` = {f689d7c8-6f1f-436b-8a59-44054010 7e9b}
+    const WSAID_WSARECVMSG: Guid = Guid {
+        data1: 0xf689_d7c8,
+        data2: 0x6f1f,
+        data3: 0x436b,
+        data4: [0x8a, 0x59, 0x44, 0x05, 0x40, 0x10, 0x7e, 0x9b],
+    };
+
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+
+    #[repr(C)]
+    struct WsaBuf {
+        len: u32,
+        buf: *mut u8,
+    }
+
+    #[repr(C)]
+    struct WsaMsg {
+        name: *mut c_void,
+        namelen: i32,
+        buffers: *mut WsaBuf,
+        buffer_count: u32,
+        control: WsaBuf,
+        flags: u32,
+    }
+
+    #[repr(C)]
+    struct CmsgHdr {
+        cmsg_len: usize,
+        cmsg_level: i32,
+        cmsg_type: i32,
+    }
+
+    /// `sockaddr_in` — family, port, addr (network byte order), padding.
+    #[repr(C)]
+    struct SockaddrIn {
+        family: u16,
+        port: u16,
+        addr: u32,
+        zero: [u8; 8],
+    }
+
+    type WsaRecvMsgFn = unsafe extern "system" fn(
+        s: Socket_,
+        msg: *mut WsaMsg,
+        recvd: *mut u32,
+        overlapped: *mut c_void,
+        completion: *mut c_void,
+    ) -> i32;
+
+    #[link(name = "ws2_32")]
+    extern "system" {
+        fn setsockopt(
+            s: Socket_,
+            level: i32,
+            optname: i32,
+            optval: *const c_void,
+            optlen: i32,
+        ) -> i32;
+        fn WSAIoctl(
+            s: Socket_,
+            code: u32,
+            inbuf: *const c_void,
+            inlen: u32,
+            outbuf: *mut c_void,
+            outlen: u32,
+            bytes: *mut u32,
+            overlapped: *mut c_void,
+            completion: *mut c_void,
+        ) -> i32;
+        fn WSAGetLastError() -> i32;
+    }
+
+    // Cached `WSARecvMsg` pointer (0 = unavailable). `RESOLVED`: 0 = not yet
+    // attempted, 1 = resolved OK, 2 = attempted and failed.
+    static WSARECVMSG_PTR: AtomicUsize = AtomicUsize::new(0);
+    static RESOLVED: AtomicUsize = AtomicUsize::new(0);
+
+    pub fn enable_tos_ttl(sock: &Socket) {
+        let s = sock.as_raw_socket() as Socket_;
+        let on: i32 = 1;
+        let p = &on as *const i32 as *const c_void;
+        unsafe {
+            // Best-effort: pre-Win10 these may no-op; TTL (IP_RECVTTL,
+            // Vista+) still works even when TOS doesn't.
+            setsockopt(s, IPPROTO_IP, IP_RECVTTL, p, 4);
+            setsockopt(s, IPPROTO_IP, IP_RECVTOS, p, 4);
         }
-        Err(e)
-            if e.kind() == std::io::ErrorKind::WouldBlock
-                || e.kind() == std::io::ErrorKind::TimedOut =>
-        {
-            Ok(None)
+        resolve_wsarecvmsg(s);
+    }
+
+    fn resolve_wsarecvmsg(s: Socket_) {
+        if RESOLVED.load(Ordering::Acquire) != 0 {
+            return;
         }
-        Err(e) => Err(e),
+        let mut func: usize = 0;
+        let mut bytes: u32 = 0;
+        let rc = unsafe {
+            WSAIoctl(
+                s,
+                SIO_GET_EXTENSION_FUNCTION_POINTER,
+                &WSAID_WSARECVMSG as *const Guid as *const c_void,
+                std::mem::size_of::<Guid>() as u32,
+                &mut func as *mut usize as *mut c_void,
+                std::mem::size_of::<usize>() as u32,
+                &mut bytes,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if rc == 0 && func != 0 {
+            WSARECVMSG_PTR.store(func, Ordering::Release);
+            RESOLVED.store(1, Ordering::Release);
+        } else {
+            RESOLVED.store(2, Ordering::Release);
+        }
+    }
+
+    pub fn supported() -> bool {
+        RESOLVED.load(Ordering::Acquire) == 1
+    }
+
+    pub fn recv(sock: &Socket) -> std::io::Result<Option<(Option<Ipv4Addr>, Sample)>> {
+        let ptr = WSARECVMSG_PTR.load(Ordering::Acquire);
+        if ptr == 0 {
+            // No extension function — fall back to a plain read so the
+            // listen loop still drains the socket (DSCP/TTL unknown → 0).
+            let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 2048];
+            return match sock.recv_from(&mut buf) {
+                Ok((_n, from)) => Ok(Some((
+                    from.as_socket_ipv4().map(|a| *a.ip()),
+                    Sample { dscp: 0, ttl: 0 },
+                ))),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    Ok(None)
+                }
+                Err(e) => Err(e),
+            };
+        }
+
+        let recvmsg: WsaRecvMsgFn = unsafe { std::mem::transmute(ptr) };
+        let s = sock.as_raw_socket() as Socket_;
+        let mut databuf = [0u8; 2048];
+        let mut ctrl = [0u8; 256];
+        let mut name = SockaddrIn {
+            family: 0,
+            port: 0,
+            addr: 0,
+            zero: [0; 8],
+        };
+        let mut wbuf = WsaBuf {
+            len: databuf.len() as u32,
+            buf: databuf.as_mut_ptr(),
+        };
+        let mut msg = WsaMsg {
+            name: &mut name as *mut SockaddrIn as *mut c_void,
+            namelen: std::mem::size_of::<SockaddrIn>() as i32,
+            buffers: &mut wbuf,
+            buffer_count: 1,
+            control: WsaBuf {
+                len: ctrl.len() as u32,
+                buf: ctrl.as_mut_ptr(),
+            },
+            flags: 0,
+        };
+        let mut recvd: u32 = 0;
+        let rc = unsafe {
+            recvmsg(
+                s,
+                &mut msg,
+                &mut recvd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if rc == SOCKET_ERROR {
+            let e = unsafe { WSAGetLastError() };
+            if e == WSAEWOULDBLOCK || e == WSAETIMEDOUT {
+                return Ok(None);
+            }
+            return Err(std::io::Error::from_raw_os_error(e));
+        }
+
+        let from = if name.family == AF_INET {
+            Some(Ipv4Addr::from(u32::from_be(name.addr)))
+        } else {
+            None
+        };
+
+        // Walk the returned control messages for IP_TOS / IP_TTL. On the
+        // x64 Windows ABI both the header and the data are 8-byte aligned,
+        // so the data sits 16 bytes (sizeof WSACMSGHDR, rounded up) past
+        // the header and successive headers advance by `cmsg_len` rounded
+        // up to 8. Windows delivers these values as a little-endian INT, so
+        // the low byte is the value we want either way.
+        let (mut tos, mut ttl): (u8, u8) = (0, 0);
+        let ctrl_len = recvd_control_len(&msg, &ctrl);
+        let base = msg.control.buf;
+        const HDR: usize = std::mem::size_of::<CmsgHdr>(); // 16 on x64
+        const ALIGN: usize = 8;
+        const DATA_OFF: usize = (HDR + ALIGN - 1) & !(ALIGN - 1); // 16
+        let mut off = 0usize;
+        while off + HDR <= ctrl_len {
+            let cmsg = unsafe { &*(base.add(off) as *const CmsgHdr) };
+            let clen = cmsg.cmsg_len;
+            if clen < HDR || off + clen > ctrl_len {
+                break;
+            }
+            if cmsg.cmsg_level == IPPROTO_IP && clen > DATA_OFF {
+                let val = unsafe { *base.add(off + DATA_OFF) };
+                if cmsg.cmsg_type == IP_TOS {
+                    tos = val;
+                } else if cmsg.cmsg_type == IP_TTL {
+                    ttl = val;
+                }
+            }
+            let adv = (clen + ALIGN - 1) & !(ALIGN - 1);
+            if adv == 0 {
+                break;
+            }
+            off += adv;
+        }
+
+        Ok(Some((
+            from,
+            Sample {
+                dscp: tos >> 2, // upper 6 bits of the TOS byte
+                ttl,
+            },
+        )))
+    }
+
+    /// The control buffer length actually written. `WSARecvMsg` updates
+    /// `msg.control.len` to the bytes used; clamp to our buffer just in
+    /// case a provider leaves it at the input capacity.
+    fn recvd_control_len(msg: &WsaMsg, ctrl: &[u8]) -> usize {
+        (msg.control.len as usize).min(ctrl.len())
     }
 }
+
 
 /// Helper for tests / future use — true if an IPv4 is in the AES67
 /// 239.69.0.0/16 transmitter range.

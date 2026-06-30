@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -15,8 +15,10 @@ import {
   ArrowRight,
   ArrowUp,
   Globe2,
+  Maximize2,
   Router as RouterIcon,
   Server,
+  X,
 } from "lucide-react";
 import { useApp } from "../store";
 import type { LiveSample } from "../types";
@@ -245,20 +247,10 @@ function TrendArrow({
   );
 }
 
-interface PanelProps {
-  panel: PanelDef;
-  rows: Row[];
-}
-
-function Panel({ panel, rows }: PanelProps) {
-  const value = latestValue(rows, panel.key);
-  const status = statusColor(value, panel);
-  const dir = trendDirection(rows, panel.key, panel);
-  // Whether the observed change is good. For "lower-is-better" metrics, a
-  // downward trend is improving; for "higher-is-better", upward is improving.
-  const isImproving = panel.lowerIsBetter ? dir === "down" : dir === "up";
-
-  const chartData = useMemo(() => {
+/** Bucket the raw rows down to <= MAX_CHART_POINTS for one metric, keeping the
+ *  worst-direction value per bucket so spikes/dips survive downsampling. */
+function useChartData(panel: PanelDef, rows: Row[]) {
+  return useMemo(() => {
     const mapped = rows.map((r) => ({
       ago: r.ago,
       clock: r.clock,
@@ -276,7 +268,7 @@ function Panel({ panel, rows }: PanelProps) {
     const out: typeof mapped = [];
     for (let i = 0; i < mapped.length; i += bucket) {
       const slice = mapped.slice(i, i + bucket);
-      let chosen = slice[slice.length - 1];
+      const chosen = slice[slice.length - 1];
       let worst: (typeof slice)[number] | null = null;
       for (const p of slice) {
         if (p.v == null) continue;
@@ -290,14 +282,125 @@ function Panel({ panel, rows }: PanelProps) {
     }
     return out;
   }, [rows, panel.key, panel.lowerIsBetter]);
+}
 
-  // Compute axis ticks: 30m, 22.5m, 15m, 7.5m, now.
-  const ageRange =
-    chartData.length > 0 ? chartData[0].ago : 0; // first row = oldest = largest ago
+/** The recharts area chart for one metric. Sized entirely by its parent
+ *  container, so the same component renders both the compact tile sparkline
+ *  and the large expanded modal. */
+function LiveAreaChart({ panel, rows }: { panel: PanelDef; rows: Row[] }) {
+  const chartData = useChartData(panel, rows);
+  // first row = oldest = largest ago
+  const ageRange = chartData.length > 0 ? chartData[0].ago : 0;
   const ticks = useMemo(() => {
     const candidates = [1800, 1350, 900, 450, 0];
     return candidates.filter((t) => t <= ageRange + 5);
   }, [ageRange]);
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart
+        data={chartData}
+        margin={{ top: 6, right: 4, bottom: 0, left: -16 }}
+      >
+        <defs>
+          <linearGradient id={panel.fillId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={panel.color} stopOpacity={0.45} />
+            <stop offset="100%" stopColor={panel.color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid
+          strokeDasharray="2 4"
+          stroke="rgba(148,163,184,0.12)"
+          vertical={false}
+        />
+        <XAxis
+          dataKey="ago"
+          type="number"
+          domain={[CHART_WINDOW_SECONDS, 0]}
+          ticks={ticks}
+          tickFormatter={xTickFormatter}
+          tick={{ fill: "rgba(148,163,184,0.65)", fontSize: 10 }}
+          axisLine={false}
+          tickLine={false}
+          reversed
+        />
+        <YAxis
+          tick={{ fill: "rgba(148,163,184,0.65)", fontSize: 10 }}
+          axisLine={false}
+          tickLine={false}
+          width={42}
+          domain={panel.yDomain ?? ["auto", "auto"]}
+        />
+        <Tooltip
+          cursor={{ stroke: panel.color, strokeOpacity: 0.3 }}
+          contentStyle={{
+            background: "rgba(15,23,42,0.95)",
+            border: "1px solid rgba(148,163,184,0.2)",
+            borderRadius: 8,
+            fontSize: 11,
+            padding: "6px 10px",
+          }}
+          labelStyle={{ color: "rgba(226,232,240,0.8)" }}
+          itemStyle={{ color: panel.color }}
+          labelFormatter={(_label, payload) => {
+            const p = payload?.[0]?.payload as
+              | { clock?: string; ago?: number }
+              | undefined;
+            if (!p) return "";
+            return `${p.clock} (${formatAgo(p.ago ?? 0)})`;
+          }}
+          formatter={(v) => {
+            if (typeof v !== "number" || Number.isNaN(v)) {
+              return ["—", panel.unit];
+            }
+            return [panel.format(v), panel.unit];
+          }}
+        />
+        <ReferenceLine
+          y={panel.thresholds.warn}
+          stroke="rgba(251,191,36,0.5)"
+          strokeDasharray="3 3"
+          ifOverflow="extendDomain"
+        />
+        <ReferenceLine
+          y={panel.thresholds.bad}
+          stroke="rgba(244,63,94,0.55)"
+          strokeDasharray="3 3"
+          ifOverflow="extendDomain"
+        />
+        <Area
+          type="monotone"
+          dataKey="v"
+          stroke={panel.color}
+          strokeWidth={1.75}
+          fill={`url(#${panel.fillId})`}
+          isAnimationActive={false}
+          connectNulls={false}
+          dot={false}
+          activeDot={{
+            r: 3,
+            stroke: panel.color,
+            strokeWidth: 2,
+            fill: "rgba(15,23,42,0.95)",
+          }}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+interface PanelProps {
+  panel: PanelDef;
+  rows: Row[];
+  onExpand: () => void;
+}
+
+function Panel({ panel, rows, onExpand }: PanelProps) {
+  const value = latestValue(rows, panel.key);
+  const status = statusColor(value, panel);
+  const dir = trendDirection(rows, panel.key, panel);
+  // Whether the observed change is good. For "lower-is-better" metrics, a
+  // downward trend is improving; for "higher-is-better", upward is improving.
+  const isImproving = panel.lowerIsBetter ? dir === "down" : dir === "up";
 
   const Icon = panel.Icon;
 
@@ -319,7 +422,18 @@ function Panel({ panel, rows }: PanelProps) {
                 {panel.sublabel}
               </p>
             </div>
-            <TrendArrow dir={dir} isImproving={isImproving} />
+            <div className="flex items-center gap-1">
+              <TrendArrow dir={dir} isImproving={isImproving} />
+              <button
+                type="button"
+                onClick={onExpand}
+                title="Expand chart"
+                aria-label={`Expand ${panel.label} chart`}
+                className="inline-flex h-5 w-5 items-center justify-center rounded-md text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-2)]/70 hover:text-[var(--color-text)]"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
           <div className="mt-1.5 flex items-baseline gap-2">
             <span
@@ -337,95 +451,7 @@ function Panel({ panel, rows }: PanelProps) {
       </div>
 
       <div className="mt-3 h-28 w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart
-            data={chartData}
-            margin={{ top: 6, right: 4, bottom: 0, left: -16 }}
-          >
-            <defs>
-              <linearGradient id={panel.fillId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={panel.color} stopOpacity={0.45} />
-                <stop offset="100%" stopColor={panel.color} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid
-              strokeDasharray="2 4"
-              stroke="rgba(148,163,184,0.12)"
-              vertical={false}
-            />
-            <XAxis
-              dataKey="ago"
-              type="number"
-              domain={[CHART_WINDOW_SECONDS, 0]}
-              ticks={ticks}
-              tickFormatter={xTickFormatter}
-              tick={{ fill: "rgba(148,163,184,0.65)", fontSize: 10 }}
-              axisLine={false}
-              tickLine={false}
-              reversed
-            />
-            <YAxis
-              tick={{ fill: "rgba(148,163,184,0.65)", fontSize: 10 }}
-              axisLine={false}
-              tickLine={false}
-              width={42}
-              domain={panel.yDomain ?? ["auto", "auto"]}
-            />
-            <Tooltip
-              cursor={{ stroke: panel.color, strokeOpacity: 0.3 }}
-              contentStyle={{
-                background: "rgba(15,23,42,0.95)",
-                border: "1px solid rgba(148,163,184,0.2)",
-                borderRadius: 8,
-                fontSize: 11,
-                padding: "6px 10px",
-              }}
-              labelStyle={{ color: "rgba(226,232,240,0.8)" }}
-              itemStyle={{ color: panel.color }}
-              labelFormatter={(_label, payload) => {
-                const p = payload?.[0]?.payload as
-                  | { clock?: string; ago?: number }
-                  | undefined;
-                if (!p) return "";
-                return `${p.clock} (${formatAgo(p.ago ?? 0)})`;
-              }}
-              formatter={(v) => {
-                if (typeof v !== "number" || Number.isNaN(v)) {
-                  return ["—", panel.unit];
-                }
-                return [panel.format(v), panel.unit];
-              }}
-            />
-            <ReferenceLine
-              y={panel.thresholds.warn}
-              stroke="rgba(251,191,36,0.5)"
-              strokeDasharray="3 3"
-              ifOverflow="extendDomain"
-            />
-            <ReferenceLine
-              y={panel.thresholds.bad}
-              stroke="rgba(244,63,94,0.55)"
-              strokeDasharray="3 3"
-              ifOverflow="extendDomain"
-            />
-            <Area
-              type="monotone"
-              dataKey="v"
-              stroke={panel.color}
-              strokeWidth={1.75}
-              fill={`url(#${panel.fillId})`}
-              isAnimationActive={false}
-              connectNulls={false}
-              dot={false}
-              activeDot={{
-                r: 3,
-                stroke: panel.color,
-                strokeWidth: 2,
-                fill: "rgba(15,23,42,0.95)",
-              }}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+        <LiveAreaChart panel={panel} rows={rows} />
       </div>
     </div>
   );
@@ -447,6 +473,19 @@ export function LiveMetricsChart() {
     () => toRows(liveSamples).filter((r) => r.ago <= CHART_WINDOW_SECONDS),
     [liveSamples],
   );
+
+  const [expandedKey, setExpandedKey] = useState<MetricKey | null>(null);
+  const expandedPanel = PANELS.find((p) => p.key === expandedKey) ?? null;
+
+  // Close the expanded chart on Escape.
+  useEffect(() => {
+    if (!expandedKey) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpandedKey(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expandedKey]);
 
   const seconds = liveSamples.length;
   const coverage = seconds === 0 ? "—" : formatAgo(seconds - 1);
@@ -499,8 +538,48 @@ export function LiveMetricsChart() {
       ) : (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {PANELS.map((panel) => (
-            <Panel key={panel.key} panel={panel} rows={rows} />
+            <Panel
+              key={panel.key}
+              panel={panel}
+              rows={rows}
+              onExpand={() => setExpandedKey(panel.key)}
+            />
           ))}
+        </div>
+      )}
+
+      {expandedPanel && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+          onClick={() => setExpandedKey(null)}
+        >
+          <div
+            className="flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--color-text)]">
+                  {expandedPanel.label}
+                </h3>
+                <p className="text-xs text-[var(--color-muted)]">
+                  {expandedPanel.sublabel}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpandedKey(null)}
+                title="Close"
+                aria-label="Close expanded chart"
+                className="rounded-lg p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-2)]/70 hover:text-[var(--color-text)]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="h-[60vh] w-full px-4 py-4">
+              <LiveAreaChart panel={expandedPanel} rows={rows} />
+            </div>
+          </div>
         </div>
       )}
     </section>

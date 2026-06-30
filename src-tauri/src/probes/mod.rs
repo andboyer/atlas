@@ -14,6 +14,8 @@ pub mod lldp;
 pub mod macos_corewlan;
 pub mod mtu;
 pub mod multicast;
+#[cfg(target_os = "windows")]
+pub mod npcap;
 pub mod phy_efficiency;
 pub mod ptp;
 pub mod quality;
