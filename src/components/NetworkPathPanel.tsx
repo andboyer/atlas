@@ -67,6 +67,13 @@ export function NetworkPathPanel({
     useShallow((s) => (s.settings.preferred_interface || "").trim() || null),
   );
 
+  // The hop-strip tiles (gateway / DNS / internet latency) are driven by the
+  // scan's reachability stats, not the trace. So a manual refresh re-runs the
+  // quick scan too, otherwise the tiles keep showing stale numbers while only
+  // the route trace below updates.
+  const runQuickScan = useApp((s) => s.runQuickScan);
+  const scanning = useApp((s) => s.scanning);
+
   async function runTrace() {
     setTracing(true);
     setTraceError(null);
@@ -81,6 +88,11 @@ export function NetworkPathPanel({
     } finally {
       setTracing(false);
     }
+  }
+
+  // Manual refresh: update both the reachability tiles and the route trace.
+  async function refreshAll() {
+    await Promise.all([runQuickScan(), runTrace()]);
   }
 
   useEffect(() => {
@@ -174,9 +186,9 @@ export function NetworkPathPanel({
 
       <TracePanel
         hops={hops}
-        tracing={tracing}
+        tracing={tracing || scanning}
         error={traceError}
-        onRefresh={runTrace}
+        onRefresh={refreshAll}
       />
 
       <div className="mt-4 grid grid-cols-1 gap-2 text-xs sm:grid-cols-3">

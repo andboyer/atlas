@@ -106,6 +106,9 @@ export function AvDiagnostics() {
         </div>
       )}
 
+      {/* ── LLM insights ── */}
+      <AvInsights />
+
       {/* ── Heuristic warnings strip ── */}
       {av && av.warnings.length > 0 && <WarningStrip warnings={av.warnings} />}
 
@@ -127,9 +130,6 @@ export function AvDiagnostics() {
         error={deepError}
         onRun={runDeep}
       />
-
-      {/* ── LLM insights ── */}
-      <AvInsights />
     </div>
   );
 }
@@ -515,7 +515,6 @@ function DeepProbesCard({
   const lldp = deep?.lldp ?? null;
   const linkAudit = deep?.link_audit ?? null;
   const sap = deep?.sap ?? null;
-  const stp = deep?.stp ?? null;
 
   return (
     <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
@@ -583,11 +582,6 @@ function DeepProbesCard({
           result={sap}
           running={running}
           onRun={() => void onRun("sap-listen")}
-        />
-        <StpProbePanel
-          result={stp}
-          running={running}
-          onRun={() => void onRun("stp-listen")}
         />
       </div>
     </section>
@@ -779,7 +773,7 @@ function stpSymptom(verdict: string): string | null {
   }
 }
 
-function StpProbePanel({
+export function StpProbePanel({
   result,
   running,
   onRun,

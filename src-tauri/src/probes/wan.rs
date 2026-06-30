@@ -9,9 +9,11 @@
 
 use crate::types::WanInfo;
 use serde::Deserialize;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 const IPAPI_URL: &str = "https://ipapi.co/json/";
+const IPV4_PROBE_URL: &str = "https://api4.ipify.org";
 const IPV6_PROBE_URL: &str = "https://api6.ipify.org";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -32,30 +34,53 @@ pub async fn probe_wan() -> Option<WanInfo> {
         .build()
         .ok()?;
 
-    // IPv4 + geo + ASN via ipapi.co
+    // IPv4 + geo + ASN via ipapi.co. Note: ipapi.co echoes back whichever
+    // address the request egressed from — on a dual-stack host that can be an
+    // IPv6 address, so classify the returned IP rather than assuming IPv4.
     let mut info = match client.get(IPAPI_URL).send().await {
         Ok(resp) if resp.status().is_success() => match resp.json::<IpApiResponse>().await {
-            Ok(body) => WanInfo {
-                public_ipv4: body.ip.clone(),
-                public_ipv6: None,
-                asn: parse_asn(body.asn.as_deref()),
-                isp: body.org.clone(),
-                country: body.country_code.clone(),
-                region: format_region(body.city.as_deref(), body.region_code.as_deref()),
-                dual_stack: false,
-            },
+            Ok(body) => {
+                let (v4, v6) = classify_ip(body.ip.as_deref());
+                WanInfo {
+                    public_ipv4: v4,
+                    public_ipv6: v6,
+                    asn: parse_asn(body.asn.as_deref()),
+                    isp: body.org.clone(),
+                    country: body.country_code.clone(),
+                    region: format_region(body.city.as_deref(), body.region_code.as_deref()),
+                    dual_stack: false,
+                }
+            }
             Err(_) => WanInfo::empty(),
         },
         _ => WanInfo::empty(),
     };
 
+    // If we still don't have an IPv4 address (e.g. the geo lookup egressed over
+    // IPv6 on a dual-stack host), ask an IPv4-only endpoint directly so the
+    // "Public IPv4" field never shows an IPv6 address.
+    if info.public_ipv4.is_none() {
+        if let Ok(resp) = client.get(IPV4_PROBE_URL).send().await {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.text().await {
+                    let trimmed = body.trim();
+                    if trimmed.parse::<Ipv4Addr>().is_ok() {
+                        info.public_ipv4 = Some(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     // Best-effort IPv6 probe (independent endpoint).
-    if let Ok(resp) = client.get(IPV6_PROBE_URL).send().await {
-        if resp.status().is_success() {
-            if let Ok(body) = resp.text().await {
-                let trimmed = body.trim();
-                if looks_like_ipv6(trimmed) {
-                    info.public_ipv6 = Some(trimmed.to_string());
+    if info.public_ipv6.is_none() {
+        if let Ok(resp) = client.get(IPV6_PROBE_URL).send().await {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.text().await {
+                    let trimmed = body.trim();
+                    if looks_like_ipv6(trimmed) {
+                        info.public_ipv6 = Some(trimmed.to_string());
+                    }
                 }
             }
         }
@@ -87,6 +112,18 @@ fn parse_asn(s: Option<&str>) -> Option<u32> {
     // ipapi.co returns "AS7922" — strip the prefix.
     let s = s?.trim_start_matches("AS").trim_start_matches("as");
     s.parse().ok()
+}
+
+/// Classify a public-IP string returned by a geo/echo endpoint into
+/// `(ipv4, ipv6)`. These endpoints reflect whichever address the request
+/// egressed from, so on a dual-stack host an "IPv4" lookup can come back as
+/// IPv6 — this keeps each address in its correct field.
+fn classify_ip(s: Option<&str>) -> (Option<String>, Option<String>) {
+    match s.map(str::trim).and_then(|s| s.parse::<IpAddr>().ok()) {
+        Some(IpAddr::V4(v4)) => (Some(v4.to_string()), None),
+        Some(IpAddr::V6(v6)) => (None, Some(v6.to_string())),
+        None => (None, None),
+    }
 }
 
 fn format_region(city: Option<&str>, region: Option<&str>) -> Option<String> {
@@ -136,5 +173,19 @@ mod tests {
         assert!(looks_like_ipv6("fe80::1"));
         assert!(!looks_like_ipv6("8.8.8.8"));
         assert!(!looks_like_ipv6("garbage with no colons"));
+    }
+
+    #[test]
+    fn classifies_ip_into_correct_family() {
+        assert_eq!(
+            classify_ip(Some("203.0.113.7")),
+            (Some("203.0.113.7".to_string()), None)
+        );
+        assert_eq!(
+            classify_ip(Some(" 2606:4700:4700::1111 ")),
+            (None, Some("2606:4700:4700::1111".to_string()))
+        );
+        assert_eq!(classify_ip(Some("not-an-ip")), (None, None));
+        assert_eq!(classify_ip(None), (None, None));
     }
 }

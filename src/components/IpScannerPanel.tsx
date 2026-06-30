@@ -32,6 +32,18 @@ const PORT_LABELS: Record<number, string> = {
   9100: "RAW print",
 };
 
+/** Numeric-aware IPv4 sort so 192.168.1.2 sorts before 192.168.1.10. */
+function compareIps(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 4; i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da !== db) return da - db;
+  }
+  return a.localeCompare(b);
+}
+
 export function IpScannerPanel() {
   const cidr = useApp((s) => s.ipScanCidr);
   const setCidr = useApp((s) => s.setIpScanCidr);
@@ -40,11 +52,34 @@ export function IpScannerPanel() {
   const error = useApp((s) => s.ipScanError);
   const runSubnetScan = useApp((s) => s.runSubnetScan);
   const addHostToFleet = useApp((s) => s.addHostToFleet);
+  const discovered = useApp((s) => s.lastScan?.devices) ?? [];
   const [menu, setMenu] = useState<{ x: number; y: number; host: IpScanHost } | null>(
     null,
   );
   // Transient errors from row actions (browser / SSH launch).
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Devices found passively during the normal scan (mDNS + ARP). Shown by
+  // default so the table isn't empty before an active sweep is run. Mapped
+  // onto the IpScanHost shape used by the table + context menu. A full
+  // "Scan" replaces these with the active-sweep results.
+  const discoveredHosts: IpScanHost[] = discovered
+    .filter((d) => d.ip)
+    .map((d) => ({
+      ip: d.ip as string,
+      mac: d.mac || null,
+      vendor: d.vendor,
+      hostname: d.hostname,
+      latency_ms: d.latency_ms,
+      online: d.online,
+      open_ports: [],
+    }))
+    .sort((a, b) => compareIps(a.ip, b.ip));
+
+  // The active sweep result wins once it exists; otherwise fall back to the
+  // passively-discovered devices.
+  const showingDiscovered = !result;
+  const rows = result ? result.hosts : discoveredHosts;
 
   // Pre-fill the CIDR from the active interface on first mount (only if the
   // store doesn't already hold one from a previous visit).
@@ -157,12 +192,21 @@ export function IpScannerPanel() {
               {(result.duration_ms / 1000).toFixed(1)}s
             </span>
           )}
+          {showingDiscovered && !loading && discoveredHosts.length > 0 && (
+            <span className="text-xs text-[var(--color-muted)]">
+              {discoveredHosts.length} auto-discovered · Scan to sweep the full
+              subnet
+            </span>
+          )}
         </div>
         <p className="mt-2 text-[11px] text-[var(--color-muted)]">
-          Active sweep: pings every address, reads ARP for MACs, browses mDNS
-          for names, and probes common TCP ports. Ranges are capped at 1024
-          hosts (use /22 or smaller). Right-click a row to add it to the Fleet,
-          open it in a browser, or launch an SSH window.
+          Auto-discovered devices (passive mDNS + ARP from the latest scan) are
+          listed below. Run an active <strong>Scan</strong> to ping every
+          address, read ARP for MACs, browse mDNS for names, and probe common
+          TCP ports — this replaces the discovered list with the full sweep.
+          Ranges are capped at 1024 hosts (use /22 or smaller). Right-click a
+          row to add it to the Fleet, open it in a browser, or launch an SSH
+          window.
         </p>
       </div>
 
@@ -174,8 +218,14 @@ export function IpScannerPanel() {
       )}
 
       {/* Results */}
-      {result && result.hosts.length > 0 ? (
+      {rows.length > 0 ? (
         <div className="atlas-card overflow-hidden">
+          {showingDiscovered && (
+            <div className="border-b border-[var(--color-border)]/60 bg-[var(--color-panel-2)]/40 px-4 py-2 text-[11px] text-[var(--color-muted)]">
+              Showing auto-discovered devices. Open ports are only probed during
+              an active scan.
+            </div>
+          )}
           <table className="w-full text-sm">
             <thead className="bg-[var(--color-panel-2)]/60 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-muted)]">
               <tr>
@@ -188,7 +238,7 @@ export function IpScannerPanel() {
               </tr>
             </thead>
             <tbody>
-              {result.hosts.map((h) => (
+              {rows.map((h) => (
                 <tr
                   key={h.ip}
                   onContextMenu={(e) => openRow(h, e)}
@@ -243,7 +293,8 @@ export function IpScannerPanel() {
         !loading &&
         !error && (
           <div className="atlas-card p-6 text-sm text-[var(--color-muted)]">
-            Enter a subnet and press Scan to discover live hosts.
+            No devices discovered yet. Enter a subnet and press Scan to actively
+            sweep the network.
           </div>
         )
       )}

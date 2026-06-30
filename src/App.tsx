@@ -29,6 +29,7 @@ import AssistantDock from "./components/AssistantDock";
 import { AiExplanation } from "./components/AiExplanation";
 import { RadioInsights } from "./components/RadioInsights";
 import { AvDiagnostics } from "./components/AvDiagnostics";
+import { StpDiagnostics } from "./components/StpDiagnostics";
 import { OllamaBanner } from "./components/OllamaBanner";
 import UpdateBanner from "./components/UpdateBanner";
 import QualityPanel from "./components/QualityPanel";
@@ -70,8 +71,9 @@ const LEGACY_TAB_MAP: Record<string, { group: GroupId; sub: string }> = {
   fleet: { group: "avfleet", sub: "fleet" },
   devices: { group: "network", sub: "devices" },
   scanner: { group: "network", sub: "devices" },
+  stp: { group: "avfleet", sub: "stp" },
   activity: { group: "activity", sub: "timeline" },
-  tools: { group: "activity", sub: "tools" },
+  tools: { group: "network", sub: "stress" },
   assistant: { group: "home", sub: "summary" },
 };
 
@@ -322,14 +324,16 @@ function App() {
       subs: [
         { id: "health", label: "Path & WAN" },
         { id: "devices", label: "Devices", badge: devicesCount },
+        { id: "stress", label: "Stress tests" },
       ],
     },
     {
       id: "avfleet",
-      label: "AV & Fleet",
+      label: "Diagnostics",
       icon: <Waves className="h-4 w-4" />,
       subs: [
         { id: "av", label: "AV / Multicast" },
+        { id: "stp", label: "STP" },
         { id: "runbooks", label: "Runbooks" },
         { id: "fleet", label: "Fleet" },
       ],
@@ -341,7 +345,6 @@ function App() {
       subs: [
         { id: "timeline", label: "Timeline" },
         { id: "history", label: "History" },
-        { id: "tools", label: "Stress tests" },
       ],
     },
   ];
@@ -453,9 +456,8 @@ function App() {
                 {/* ── Overview ─────────────────────────────────────────── */}
                 {activeGroup === "home" && activeSub === "summary" && (
                   <>
-                    <LiveMetricsChart />
                     <AiExplanation />
-                    {lastScan && <QualityPanel quality={lastScan.quality} />}
+                    <LiveMetricsChart />
                     <TrendsPanel />
                   </>
                 )}
@@ -495,11 +497,11 @@ function App() {
                 )}
                 {activeGroup === "wifi" && activeSub === "link" && (
                   <>
+                    <RadioInsights />
                     {lastScan && <LinkDetailsPanel link={lastScan.link} />}
                     {lastScan && (
                       <PhyEfficiencyBadge phy={lastScan.phy_efficiency} />
                     )}
-                    <RadioInsights />
                   </>
                 )}
 
@@ -531,10 +533,24 @@ function App() {
                     <IpScannerPanel />
                   </section>
                 )}
+                {activeGroup === "network" && activeSub === "stress" && (
+                  <section>
+                    <SectionHeading icon={<Wrench className="h-3.5 w-3.5" />}>
+                      Stress tests
+                    </SectionHeading>
+                    {lastScan && <QualityPanel quality={lastScan.quality} />}
+                    <div className="mt-6">
+                      <StressTestPanel />
+                    </div>
+                  </section>
+                )}
 
-                {/* ── AV & Fleet ───────────────────────────────────────── */}
+                {/* ── Diagnostics ──────────────────────────────────────── */}
                 {activeGroup === "avfleet" && activeSub === "av" && (
                   <AvDiagnostics />
+                )}
+                {activeGroup === "avfleet" && activeSub === "stp" && (
+                  <StpDiagnostics />
                 )}
                 {activeGroup === "avfleet" && activeSub === "runbooks" && (
                   <RunbooksPanel />
@@ -575,14 +591,6 @@ function App() {
                       Past scans
                     </SectionHeading>
                     <HistoryPanel />
-                  </section>
-                )}
-                {activeGroup === "activity" && activeSub === "tools" && (
-                  <section>
-                    <SectionHeading icon={<Wrench className="h-3.5 w-3.5" />}>
-                      Stress tests
-                    </SectionHeading>
-                    <StressTestPanel />
                   </section>
                 )}
               </div>
