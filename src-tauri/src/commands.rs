@@ -1091,9 +1091,7 @@ fn is_safe_token(s: &str, allow_colon: bool) -> bool {
     !s.is_empty()
         && s.len() <= 255
         && s.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(c, '.' | '-' | '_')
-                || (allow_colon && c == ':')
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') || (allow_colon && c == ':')
         })
 }
 
@@ -1128,9 +1126,8 @@ pub async fn open_ssh_terminal(
     {
         // Drive Terminal.app via AppleScript so the session opens in a real,
         // interactive window the operator can type into.
-        let script = format!(
-            "tell application \"Terminal\"\nactivate\ndo script \"{ssh_cmd}\"\nend tell"
-        );
+        let script =
+            format!("tell application \"Terminal\"\nactivate\ndo script \"{ssh_cmd}\"\nend tell");
         std::process::Command::new("osascript")
             .arg("-e")
             .arg(&script)
@@ -1171,7 +1168,6 @@ pub async fn open_ssh_terminal(
         Err("no supported terminal emulator found (tried gnome-terminal, konsole, xterm)".into())
     }
 }
-
 
 fn collect_metric_history(store: &Store) -> crate::llm::MetricHistory {
     const METRICS: &[(&str, &str)] = &[
@@ -3171,10 +3167,10 @@ fn runbook_tokens(text: &str) -> std::collections::HashSet<String> {
         "the", "and", "for", "are", "not", "with", "this", "that", "your", "from", "was", "will",
         "any", "all", "can", "has", "have", "but", "you", "its", "per", "via", "out", "see", "run",
         "one", "two", "other", "into", "than", "then", "they", "them", "their", "there", "here",
-        "when", "what", "which", "while", "after", "before", "over", "under", "some", "most", "more",
-        "less", "each", "both", "also", "only", "like", "such", "very", "still", "likely", "cannot",
-        "does", "did", "had", "his", "her", "our", "off", "yet", "may", "might", "must", "should",
-        "would", "could", "about", "between", "during", "because", "another", "across",
+        "when", "what", "which", "while", "after", "before", "over", "under", "some", "most",
+        "more", "less", "each", "both", "also", "only", "like", "such", "very", "still", "likely",
+        "cannot", "does", "did", "had", "his", "her", "our", "off", "yet", "may", "might", "must",
+        "should", "would", "could", "about", "between", "during", "because", "another", "across",
     ];
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -3188,7 +3184,10 @@ fn runbook_tokens(text: &str) -> std::collections::HashSet<String> {
 /// then the runbook name (2), then the description (1). Returns the total
 /// score and how many *distinct* strong (weight ≥ 2) tokens matched — the
 /// caller uses both to decide whether a match is confident enough to show.
-fn score_runbook(rb: &crate::runbook::Runbook, query: &std::collections::HashSet<String>) -> (i32, i32) {
+fn score_runbook(
+    rb: &crate::runbook::Runbook,
+    query: &std::collections::HashSet<String>,
+) -> (i32, i32) {
     let symptom_tokens: std::collections::HashSet<String> =
         rb.symptoms.iter().flat_map(|s| runbook_tokens(s)).collect();
     let tag_tokens: std::collections::HashSet<String> = rb
@@ -3306,8 +3305,8 @@ pub async fn run_runbook(
     // setting), resolve a sensible default interface here rather than
     // leaving `pinned_iface = None`, which made every iface-pinned step
     // fail with "no NIC pinned".
-    let pinned = resolved_iface(&state, iface.as_deref())
-        .or_else(crate::probes::iface::default_interface);
+    let pinned =
+        resolved_iface(&state, iface.as_deref()).or_else(crate::probes::iface::default_interface);
     let inputs = crate::runbook::engine::ExecutionInputs {
         pinned_iface: pinned,
         variables: std::collections::BTreeMap::new(),

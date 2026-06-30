@@ -457,8 +457,7 @@ fn capture_igmp(iface: &str, listen_secs: u32) -> anyhow::Result<(Vec<IgmpQuerie
         ifr.ifr_name[i] = *b as libc::c_char;
     }
     if unsafe { libc::ioctl(fd, BIOCSETIF, &ifr) } < 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("BIOCSETIF {iface}"));
+        return Err(std::io::Error::last_os_error()).with_context(|| format!("BIOCSETIF {iface}"));
     }
 
     // Immediate mode: hand us each packet as it arrives instead of buffering.
@@ -579,12 +578,42 @@ fn install_igmp_filter(fd: libc::c_int, biocsetf: libc::c_ulong) -> std::io::Res
     //   ret #262144            ; ACCEPT
     //   ret #0                 ; REJECT
     let prog = [
-        BpfInsn { code: 0x28, jt: 0, jf: 0, k: 12 },
-        BpfInsn { code: 0x15, jt: 0, jf: 3, k: 0x0800 },
-        BpfInsn { code: 0x30, jt: 0, jf: 0, k: 23 },
-        BpfInsn { code: 0x15, jt: 0, jf: 1, k: 2 },
-        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0x0004_0000 },
-        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0 },
+        BpfInsn {
+            code: 0x28,
+            jt: 0,
+            jf: 0,
+            k: 12,
+        },
+        BpfInsn {
+            code: 0x15,
+            jt: 0,
+            jf: 3,
+            k: 0x0800,
+        },
+        BpfInsn {
+            code: 0x30,
+            jt: 0,
+            jf: 0,
+            k: 23,
+        },
+        BpfInsn {
+            code: 0x15,
+            jt: 0,
+            jf: 1,
+            k: 2,
+        },
+        BpfInsn {
+            code: 0x06,
+            jt: 0,
+            jf: 0,
+            k: 0x0004_0000,
+        },
+        BpfInsn {
+            code: 0x06,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
     ];
     let bp = BpfProgram {
         bf_len: prog.len() as libc::c_uint,

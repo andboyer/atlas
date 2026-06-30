@@ -528,7 +528,10 @@ async fn pull_default_model(progress: &Channel<InstallProgress>) -> Result<()> {
             }
             let now = std::time::Instant::now();
             if now >= next_emit {
-                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("downloading");
+                let status = v
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("downloading");
                 let total = v.get("total").and_then(|n| n.as_u64()).unwrap_or(0);
                 let completed = v.get("completed").and_then(|n| n.as_u64()).unwrap_or(0);
                 let step = if total > 0 {

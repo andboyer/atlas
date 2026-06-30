@@ -212,9 +212,11 @@ fn raise_fd_limit() {
         if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
             return;
         }
-        let want = FD_SOFT_TARGET.min(lim.rlim_max as u64);
-        if (lim.rlim_cur as u64) < want {
-            lim.rlim_cur = want as libc::rlim_t;
+        // Cast the target to the platform's `rlim_t` (u64 on 64-bit, u32 on
+        // 32-bit) so the comparison/assignment need no per-field casts.
+        let want = (FD_SOFT_TARGET as libc::rlim_t).min(lim.rlim_max);
+        if lim.rlim_cur < want {
+            lim.rlim_cur = want;
             let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &lim);
         }
     }
@@ -238,8 +240,7 @@ pub async fn scan_subnet(cidr: &str, iface: Option<String>) -> Result<IpScanResu
     raise_fd_limit();
 
     // Kick off the mDNS browse concurrently with the ping sweep.
-    let mdns_handle =
-        tokio::task::spawn_blocking(|| mdns::browse_blocking(Duration::from_secs(3)));
+    let mdns_handle = tokio::task::spawn_blocking(|| mdns::browse_blocking(Duration::from_secs(3)));
 
     // ── 1. Ping sweep ────────────────────────────────────────────────────
     let sem = Arc::new(Semaphore::new(PING_CONCURRENCY));

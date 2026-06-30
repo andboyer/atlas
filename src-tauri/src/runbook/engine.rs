@@ -316,10 +316,7 @@ impl Engine {
 
             match exec_result {
                 Ok(value) => {
-                    let verdict = value
-                        .get("verdict")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let verdict = value.get("verdict").and_then(|v| v.as_str()).unwrap_or("");
                     match verdict {
                         "skipped" => rec.status = StepStatus::Skipped,
                         "denied" => rec.status = StepStatus::Denied,

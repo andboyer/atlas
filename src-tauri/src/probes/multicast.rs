@@ -109,8 +109,10 @@ fn parse_netstat_g(stdout: &str) -> Vec<InterfaceMulticast> {
             // audio range (239.192) as audio flows — networks that re-home
             // Dante or run Q-SYS/AES67 off the default range otherwise look
             // like "control plane up, audio plane dead".
-            let dante_audio_groups =
-                groups.iter().filter(|g| is_audio_purpose(&g.purpose)).count() as u32;
+            let dante_audio_groups = groups
+                .iter()
+                .filter(|g| is_audio_purpose(&g.purpose))
+                .count() as u32;
             let ptp_groups = groups.iter().filter(|g| g.purpose == "ptp").count() as u32;
             InterfaceMulticast {
                 iface,

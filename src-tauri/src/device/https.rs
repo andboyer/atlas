@@ -121,7 +121,13 @@ impl HttpsTransport {
         }
         let password = keychain::get(&host.id)
             .map_err(|e| TransportError::Auth(host.id.clone(), e.to_string()))?;
-        let url = format!("{}://{}:{}{}", scheme_for(host), host.hostname, host.port, login.path);
+        let url = format!(
+            "{}://{}:{}{}",
+            scheme_for(host),
+            host.hostname,
+            host.port,
+            login.path
+        );
         let mut body = serde_json::Map::new();
         if !login.username_field.is_empty() {
             body.insert(
@@ -173,7 +179,13 @@ impl Transport for HttpsTransport {
         self.ensure_login(host).await?;
         let session = self.session_for(host)?;
         let started = Instant::now();
-        let url = format!("{}://{}:{}{}", scheme_for(host), host.hostname, host.port, req.rendered);
+        let url = format!(
+            "{}://{}:{}{}",
+            scheme_for(host),
+            host.hostname,
+            host.port,
+            req.rendered
+        );
         let method = Method::from_bytes(req.method.as_bytes())
             .map_err(|e| TransportError::Other(format!("bad method `{}`: {e}", req.method)))?;
         let mut builder = session.client.request(method, &url);

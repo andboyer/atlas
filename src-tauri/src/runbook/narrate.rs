@@ -120,10 +120,7 @@ fn derive_outcome(steps: &[StepRecord]) -> ExecutionOutcome {
     for s in steps {
         match s.status {
             StepStatus::Failed => return ExecutionOutcome::HardFail,
-            StepStatus::Warn
-            | StepStatus::Denied
-            | StepStatus::Unavailable
-            | StepStatus::Error
+            StepStatus::Warn | StepStatus::Denied | StepStatus::Unavailable | StepStatus::Error
                 if out == ExecutionOutcome::Clean =>
             {
                 out = ExecutionOutcome::Issues;

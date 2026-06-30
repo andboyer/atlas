@@ -516,8 +516,7 @@ fn capture_l2_ptp_inner(iface: &str, listen_secs: u32) -> anyhow::Result<Vec<L2R
         ifr.ifr_name[i] = *b as libc::c_char;
     }
     if unsafe { libc::ioctl(fd, BIOCSETIF, &ifr) } < 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("BIOCSETIF {iface}"));
+        return Err(std::io::Error::last_os_error()).with_context(|| format!("BIOCSETIF {iface}"));
     }
 
     // Immediate mode: hand us each frame as it arrives instead of buffering.
@@ -645,13 +644,48 @@ fn install_ptp_l2_filter(fd: libc::c_int, biocsetf: libc::c_ulong) -> std::io::R
     //   ret #0                   ; REJECT
     //   ret #262144              ; ACCEPT
     let prog = [
-        BpfInsn { code: 0x28, jt: 0, jf: 0, k: 12 },
-        BpfInsn { code: 0x15, jt: 4, jf: 0, k: 0x88f7 },
-        BpfInsn { code: 0x15, jt: 0, jf: 2, k: 0x8100 },
-        BpfInsn { code: 0x28, jt: 0, jf: 0, k: 16 },
-        BpfInsn { code: 0x15, jt: 1, jf: 0, k: 0x88f7 },
-        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0 },
-        BpfInsn { code: 0x06, jt: 0, jf: 0, k: 0x0004_0000 },
+        BpfInsn {
+            code: 0x28,
+            jt: 0,
+            jf: 0,
+            k: 12,
+        },
+        BpfInsn {
+            code: 0x15,
+            jt: 4,
+            jf: 0,
+            k: 0x88f7,
+        },
+        BpfInsn {
+            code: 0x15,
+            jt: 0,
+            jf: 2,
+            k: 0x8100,
+        },
+        BpfInsn {
+            code: 0x28,
+            jt: 0,
+            jf: 0,
+            k: 16,
+        },
+        BpfInsn {
+            code: 0x15,
+            jt: 1,
+            jf: 0,
+            k: 0x88f7,
+        },
+        BpfInsn {
+            code: 0x06,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
+        BpfInsn {
+            code: 0x06,
+            jt: 0,
+            jf: 0,
+            k: 0x0004_0000,
+        },
     ];
     let bp = BpfProgram {
         bf_len: prog.len() as libc::c_uint,

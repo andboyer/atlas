@@ -234,9 +234,7 @@ mod tests {
         let reg = load_bundled();
         for pack in reg.all() {
             assert!(
-                pack.transport == "ssh"
-                    || pack.transport == "https"
-                    || pack.transport == "http",
+                pack.transport == "ssh" || pack.transport == "https" || pack.transport == "http",
                 "pack `{}` has unknown transport `{}`",
                 pack.id,
                 pack.transport

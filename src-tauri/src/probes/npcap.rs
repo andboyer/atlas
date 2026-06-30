@@ -84,14 +84,11 @@ struct Sockaddr {
 
 type FnFindAllDevs = extern "C" fn(*mut *mut PcapIf, *mut u8) -> c_int;
 type FnFreeAllDevs = extern "C" fn(*mut PcapIf);
-type FnOpenLive =
-    extern "C" fn(*const c_char, c_int, c_int, c_int, *mut u8) -> *mut PcapT;
-type FnCompile =
-    extern "C" fn(*mut PcapT, *mut BpfProgram, *const c_char, c_int, u32) -> c_int;
+type FnOpenLive = extern "C" fn(*const c_char, c_int, c_int, c_int, *mut u8) -> *mut PcapT;
+type FnCompile = extern "C" fn(*mut PcapT, *mut BpfProgram, *const c_char, c_int, u32) -> c_int;
 type FnSetFilter = extern "C" fn(*mut PcapT, *mut BpfProgram) -> c_int;
 type FnFreeCode = extern "C" fn(*mut BpfProgram);
-type FnNextEx =
-    extern "C" fn(*mut PcapT, *mut *mut PcapPkthdr, *mut *const u8) -> c_int;
+type FnNextEx = extern "C" fn(*mut PcapT, *mut *mut PcapPkthdr, *mut *const u8) -> c_int;
 type FnClose = extern "C" fn(*mut PcapT);
 
 /// Resolved `wpcap.dll` entry points. The module handle is freed on drop.
@@ -128,7 +125,7 @@ unsafe fn resolve<T>(module: Hmodule, name: &str) -> Option<T> {
 
 fn load() -> Option<Lib> {
     unsafe {
-        let module = LoadLibraryA(b"wpcap.dll\0".as_ptr());
+        let module = LoadLibraryA(c"wpcap.dll".as_ptr() as *const u8);
         if module == 0 {
             return None;
         }
