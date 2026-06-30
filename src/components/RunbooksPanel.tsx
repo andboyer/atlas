@@ -10,10 +10,16 @@ import {
   Clock,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   Search,
   Sparkles,
+  Plus,
+  Trash2,
+  ListChecks,
+  User,
 } from "lucide-react";
 import { useApp } from "../store";
+import { RunbookBuilderModal } from "./RunbookBuilder";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types — mirror the Rust runbook engine surface.
@@ -27,6 +33,10 @@ interface RunbookSummary {
   applies_to: string[];
   symptoms: string[];
   step_count: number;
+}
+
+interface UserRunbook {
+  id: string;
 }
 
 type StepStatus =
@@ -259,8 +269,68 @@ function StepCard({ step }: { step: StepRecord }) {
   );
 }
 
+/** A runbook tile in the library grid. */
+function RunbookCard({
+  rb,
+  custom,
+  busy,
+  onRun,
+  onDelete,
+}: {
+  rb: RunbookSummary;
+  custom: boolean;
+  busy: boolean;
+  onRun: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <div className="group flex flex-col rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-4 transition-colors hover:border-[var(--color-accent)]/50">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          {rb.category}
+        </span>
+        {custom && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">
+            <User className="h-3 w-3" /> Custom
+          </span>
+        )}
+      </div>
+      <h3 className="text-sm font-semibold leading-snug">{rb.name}</h3>
+      <p className="mt-1 line-clamp-2 text-xs text-[var(--color-muted)]">
+        {rb.symptoms[0] ?? rb.description}
+      </p>
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
+        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-muted)]">
+          <ListChecks className="h-3.5 w-3.5" />
+          {rb.step_count} step{rb.step_count === 1 ? "" : "s"}
+        </span>
+        <div className="flex items-center gap-1.5">
+          {custom && onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              title="Delete this runbook"
+              className="rounded-md p-1.5 text-rose-300 opacity-0 transition-opacity hover:bg-rose-500/10 group-hover:opacity-100"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onRun}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            <Play className="h-3.5 w-3.5" /> Run
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Main panel
+// Main panel — a library of runbooks + a focused run view.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function RunbooksPanel() {
@@ -270,55 +340,53 @@ export function RunbooksPanel() {
   const nic = preferredInterface.trim() || null;
   const pendingRunbookId = useApp((s) => s.pendingRunbookId);
   const clearPendingRunbook = useApp((s) => s.clearPendingRunbook);
+
   const [runbooks, setRunbooks] = useState<RunbookSummary[]>([]);
+  const [userIds, setUserIds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string>("all");
+  const [showBuilder, setShowBuilder] = useState(false);
+
+  // Run state — when a runbook is running/has run we switch to the run view.
+  const [view, setView] = useState<"library" | "run">("library");
+  const [activeRunbook, setActiveRunbook] = useState<RunbookSummary | null>(null);
   const [running, setRunning] = useState(false);
   const [execution, setExecution] = useState<RunbookExecution | null>(null);
   const [liveSteps, setLiveSteps] = useState<StepRecord[]>([]);
   const [liveNarration, setLiveNarration] = useState<string | null>(null);
-  const [liveRunbookName, setLiveRunbookName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeRunId = useRef<string | null>(null);
 
   // Natural-language diagnosis state.
-  const [nlQuery, setNlQuery] = useState("");
   const [diagnosing, setDiagnosing] = useState(false);
-  const [aiPick, setAiPick] = useState<{
-    summary: RunbookSummary | null;
-    symptom: string;
-  } | null>(null);
+  const [noMatch, setNoMatch] = useState<string | null>(null);
+
+  const loadCatalog = async () => {
+    try {
+      const [list, users] = await Promise.all([
+        invoke<RunbookSummary[]>("list_runbooks"),
+        invoke<UserRunbook[]>("list_user_runbooks"),
+      ]);
+      setRunbooks(list);
+      setUserIds(new Set(users.map((u) => u.id)));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   // Load catalog once.
   useEffect(() => {
-    void (async () => {
-      try {
-        const list = await invoke<RunbookSummary[]>("list_runbooks");
-        setRunbooks(list);
-        if (list.length > 0 && !selected) setSelected(list[0].id);
-      } catch (e) {
-        setError(String(e));
-      }
-    })();
+    void loadCatalog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Pre-select a runbook requested from another panel (AV "Diagnose with…").
-  useEffect(() => {
-    if (pendingRunbookId) {
-      setSelected(pendingRunbookId);
-      clearPendingRunbook();
-    }
-  }, [pendingRunbookId, clearPendingRunbook]);
-
-  // Subscribe to runbook events for live transcript.
+  // Subscribe to runbook events for the live transcript.
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     void (async () => {
       unlisten = await listen<RunbookEvent>("runbook-event", (ev) => {
         const payload = ev.payload;
         if (!activeRunId.current || payload.run_id !== activeRunId.current) {
-          // Only display events for the currently-active run.
           if (payload.kind !== "started") return;
         }
         switch (payload.kind) {
@@ -326,7 +394,6 @@ export function RunbooksPanel() {
             activeRunId.current = payload.run_id;
             setLiveSteps([]);
             setLiveNarration(null);
-            setLiveRunbookName(payload.runbook_name);
             break;
           case "step_finished":
             setLiveSteps((prev) => [...prev, payload.record]);
@@ -336,10 +403,6 @@ export function RunbooksPanel() {
             break;
           case "error":
             setError(payload.message);
-            break;
-          case "completed":
-            // Final RunbookExecution will arrive via the run_runbook
-            // Promise; nothing else to do here.
             break;
           default:
             break;
@@ -351,49 +414,41 @@ export function RunbooksPanel() {
     };
   }, []);
 
+  // Categories present in the catalog, for the filter chips.
+  const categories = useMemo(() => {
+    const set = new Set(runbooks.map((rb) => rb.category));
+    return ["all", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [runbooks]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return runbooks;
-    return runbooks.filter(
-      (rb) =>
+    return runbooks.filter((rb) => {
+      if (activeCategory !== "all" && rb.category !== activeCategory) return false;
+      if (!q) return true;
+      return (
         rb.name.toLowerCase().includes(q) ||
         rb.id.toLowerCase().includes(q) ||
         rb.category.toLowerCase().includes(q) ||
         rb.description.toLowerCase().includes(q) ||
-        rb.symptoms.some((s) => s.toLowerCase().includes(q)),
-    );
-  }, [runbooks, query]);
+        rb.symptoms.some((s) => s.toLowerCase().includes(q))
+      );
+    });
+  }, [runbooks, query, activeCategory]);
 
-  const byCategory = useMemo(() => {
-    const buckets = new Map<string, RunbookSummary[]>();
-    for (const rb of filtered) {
-      const arr = buckets.get(rb.category) ?? [];
-      arr.push(rb);
-      buckets.set(rb.category, arr);
-    }
-    return Array.from(buckets.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [filtered]);
-
-  const selectedSummary = runbooks.find((rb) => rb.id === selected);
-
-  const runSelected = async (runbookId?: string) => {
-    const id = runbookId ?? selected;
-    if (!id) return;
-    setSelected(id);
+  const runRunbook = async (rb: RunbookSummary) => {
+    setActiveRunbook(rb);
+    setView("run");
     setRunning(true);
     setError(null);
     setExecution(null);
     setLiveSteps([]);
     setLiveNarration(null);
-    const name = runbooks.find((rb) => rb.id === id)?.name ?? null;
-    setLiveRunbookName(name);
     try {
       const result = await invoke<RunbookExecution>("run_runbook", {
-        runbookId: id,
+        runbookId: rb.id,
         iface: nic ?? null,
       });
       setExecution(result);
-      // Final narration on the result trumps any partial event.
       if (result.narration) setLiveNarration(result.narration);
     } catch (e) {
       setError(String(e));
@@ -402,27 +457,33 @@ export function RunbooksPanel() {
     }
   };
 
-  // ── Natural-language diagnosis ────────────────────────────────────────
-  // The user describes a problem in plain English ("I'm getting Dante audio
-  // dropouts") and `pick_runbook` resolves it to the best-matching runbook
-  // (deterministic token match, with an LLM fallback for looser phrasing).
-  // We then run that runbook automatically.
+  // Deep-link: AV "Diagnose with…" sets a pending id — run it automatically.
+  useEffect(() => {
+    if (!pendingRunbookId || runbooks.length === 0) return;
+    const rb = runbooks.find((r) => r.id === pendingRunbookId);
+    clearPendingRunbook();
+    if (rb) void runRunbook(rb);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRunbookId, runbooks]);
+
+  // Natural-language diagnosis — the search text doubles as a symptom: resolve
+  // it to the best-matching runbook (deterministic, with an LLM fallback) and
+  // run it automatically.
   const runDiagnosis = async () => {
-    const symptom = nlQuery.trim();
+    const symptom = query.trim();
     if (!symptom || diagnosing || running) return;
     setDiagnosing(true);
     setError(null);
-    setAiPick(null);
+    setNoMatch(null);
     try {
       const match = await invoke<RunbookSummary | null>("pick_runbook", {
         symptom,
       });
       if (!match) {
-        setAiPick({ summary: null, symptom });
+        setNoMatch(symptom);
         return;
       }
-      setAiPick({ summary: match, symptom });
-      await runSelected(match.id);
+      await runRunbook(match);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -430,95 +491,66 @@ export function RunbooksPanel() {
     }
   };
 
+  const deleteRunbook = async (id: string) => {
+    if (!confirm(`Delete the runbook “${id}”?`)) return;
+    try {
+      await invoke("delete_user_runbook", { id });
+      await loadCatalog();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const transcript = execution?.steps.length ? execution.steps : liveSteps;
   const narration = execution?.narration ?? liveNarration;
+  const busy = running || diagnosing;
 
-  return (
-    <div className="space-y-6">
-      <div className="atlas-card flex flex-col gap-4 p-5">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-accent)]">
-              <Stethoscope className="h-3.5 w-3.5" /> Troubleshooting Runbooks
-            </div>
-            <h2 className="mt-1 text-xl font-semibold tracking-tight">
-              Guided AV / IP investigations
-            </h2>
-            <p className="mt-1 text-sm leading-relaxed text-[var(--color-muted)]">
-              Each runbook chains local probes (PTP, DSCP, multicast, Dante
-              browse, SAP, LLDP, reachability) and uses your configured LLM to
-              narrate the findings.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              disabled={!selected || running}
-              onClick={() => runSelected()}
-              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-b from-[var(--color-accent)] to-[#b8893f] px-3.5 py-2 text-sm font-semibold text-[var(--atlas-navy,#0B1F3A)] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_14px_-8px_rgba(212,162,76,0.6)] transition-opacity hover:opacity-95 disabled:opacity-50"
-            >
-              <Play className={`h-4 w-4 ${running ? "animate-pulse" : ""}`} />
-              {running ? "Running…" : "Run runbook"}
-            </button>
-          </div>
+  // ── Run view ────────────────────────────────────────────────────────────
+  if (view === "run" && activeRunbook) {
+    return (
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => setView("library")}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-muted)] hover:bg-[var(--color-panel-2)] hover:text-[var(--color-text)]"
+          >
+            <ChevronLeft className="h-4 w-4" /> All runbooks
+          </button>
+          <button
+            type="button"
+            disabled={running}
+            onClick={() => void runRunbook(activeRunbook)}
+            className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-accent)] px-3.5 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            <Play className={`h-4 w-4 ${running ? "animate-pulse" : ""}`} />
+            {running ? "Running…" : "Run again"}
+          </button>
         </div>
 
-        {/* Natural-language diagnosis — describe the problem, AI picks and
-            runs the right runbook automatically. */}
-        <div className="rounded-xl border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 p-4">
-          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-accent)]">
-            <Sparkles className="h-3.5 w-3.5" /> Describe the problem
-          </div>
-          <p className="mt-1 text-xs text-[var(--color-muted)]">
-            Tell Atlas what you're seeing in plain English — it picks the right
-            runbook and runs the troubleshooting steps automatically.
-          </p>
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            <input
-              type="text"
-              value={nlQuery}
-              onChange={(e) => setNlQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void runDiagnosis();
-              }}
-              disabled={diagnosing || running}
-              placeholder="e.g. I'm experiencing Dante audio dropouts"
-              className="flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
-            />
-            <button
-              type="button"
-              disabled={!nlQuery.trim() || diagnosing || running}
-              onClick={() => void runDiagnosis()}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-b from-[var(--color-accent)] to-[#b8893f] px-4 py-2 text-sm font-semibold text-[var(--atlas-navy,#0B1F3A)] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_14px_-8px_rgba(212,162,76,0.6)] transition-opacity hover:opacity-95 disabled:opacity-50"
-            >
-              <Sparkles className={`h-4 w-4 ${diagnosing ? "animate-pulse" : ""}`} />
-              {diagnosing ? "Diagnosing…" : "Diagnose & run"}
-            </button>
-          </div>
-          {aiPick && (
-            <div className="mt-3 text-xs">
-              {aiPick.summary ? (
-                <div className="flex items-start gap-2 text-[var(--color-muted)]">
-                  <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-accent)]" />
-                  <span>
-                    Matched{" "}
-                    <span className="font-semibold text-[var(--color-fg)]">
-                      {aiPick.summary.name}
-                    </span>{" "}
-                    — {aiPick.summary.description}
-                  </span>
-                </div>
-              ) : (
-                <div className="flex items-start gap-2 text-amber-300">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    No runbook confidently matched “{aiPick.symptom}”. Try
-                    rephrasing, or pick one from the list below.
-                  </span>
-                </div>
-              )}
+        <div className="atlas-card p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-accent)]">
+                <Stethoscope className="h-3.5 w-3.5" /> {activeRunbook.category}
+              </div>
+              <h2 className="mt-1 text-xl font-semibold tracking-tight">
+                {activeRunbook.name}
+              </h2>
+              <p className="mt-1 text-sm text-[var(--color-muted)]">
+                {activeRunbook.description}
+              </p>
             </div>
-          )}
+            {execution && (
+              <span
+                className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                  OUTCOME_META[execution.outcome].tone
+                }`}
+              >
+                {OUTCOME_META[execution.outcome].label}
+              </span>
+            )}
+          </div>
         </div>
 
         {error && (
@@ -527,138 +559,161 @@ export function RunbooksPanel() {
           </div>
         )}
 
-        <label className="relative block">
+        {narration && (
+          <div className="atlas-card p-5">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              Narrative
+            </h3>
+            <div className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[var(--color-fg)]">
+              {narration}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            Steps
+          </h3>
+          {transcript.map((step, i) => (
+            <StepCard key={`${step.step_id}-${i}`} step={step} />
+          ))}
+          {running && transcript.length === 0 && (
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] p-4 text-sm text-[var(--color-muted)]">
+              Starting probes…
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Library view ──────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-accent)]">
+            <Stethoscope className="h-3.5 w-3.5" /> Troubleshooting Runbooks
+          </div>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight">
+            Guided AV / IP investigations
+          </h2>
+          <p className="mt-1 text-sm text-[var(--color-muted)]">
+            Pick a runbook to run a chain of local probes — or describe what
+            you're seeing and let Atlas choose one.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowBuilder(true)}
+          className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] px-3.5 py-2 text-sm font-medium hover:bg-[var(--color-panel-2)]"
+        >
+          <Plus className="h-4 w-4" /> New runbook
+        </button>
+      </div>
+
+      {/* Single smart bar — filters the grid as you type, and doubles as a
+          plain-English symptom for "Diagnose & run". */}
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <label className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]" />
           <input
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter by symptom, name, or category…"
-            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] pl-9 pr-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setNoMatch(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void runDiagnosis();
+            }}
+            placeholder="Describe a problem, or filter by name / symptom…"
+            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] py-2.5 pl-9 pr-3 text-sm outline-none focus:border-[var(--color-accent)]"
           />
         </label>
+        <button
+          type="button"
+          disabled={!query.trim() || busy}
+          onClick={() => void runDiagnosis()}
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-b from-[var(--color-accent)] to-[#b8893f] px-4 py-2.5 text-sm font-semibold text-[var(--atlas-navy,#0B1F3A)] shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_14px_-8px_rgba(212,162,76,0.6)] transition-opacity hover:opacity-95 disabled:opacity-50"
+        >
+          <Sparkles className={`h-4 w-4 ${diagnosing ? "animate-pulse" : ""}`} />
+          {diagnosing ? "Diagnosing…" : "Diagnose & run"}
+        </button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,320px)_1fr]">
-        <section className="space-y-4">
-          {byCategory.map(([cat, items]) => (
-            <div
-              key={cat}
-              className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-3"
-            >
-              <div className="px-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--color-muted)]">
-                {cat}
-              </div>
-              <ul className="space-y-1">
-                {items.map((rb) => {
-                  const active = rb.id === selected;
-                  return (
-                    <li key={rb.id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelected(rb.id)}
-                        className={`block w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                          active
-                            ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-                            : "border-transparent hover:border-[var(--color-border)] hover:bg-white/5"
-                        }`}
-                      >
-                        <div className="text-sm font-semibold">{rb.name}</div>
-                        <div className="mt-0.5 text-[11px] text-[var(--color-muted)] line-clamp-2">
-                          {rb.symptoms[0] ?? rb.description}
-                        </div>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+      {noMatch && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            No runbook confidently matched “{noMatch}”. Try rephrasing, or pick
+            one below.
+          </span>
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+          {error}
+        </div>
+      )}
+
+      {/* Category filter chips. */}
+      {categories.length > 2 && (
+        <div className="flex flex-wrap gap-2">
+          {categories.map((cat) => {
+            const active = cat === activeCategory;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setActiveCategory(cat)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium capitalize transition-colors ${
+                  active
+                    ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
+                    : "border-[var(--color-border)] text-[var(--color-muted)] hover:bg-[var(--color-panel-2)]"
+                }`}
+              >
+                {cat === "all" ? "All" : cat}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* The library grid. */}
+      {filtered.length > 0 ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((rb) => (
+            <RunbookCard
+              key={rb.id}
+              rb={rb}
+              custom={userIds.has(rb.id)}
+              busy={busy}
+              onRun={() => void runRunbook(rb)}
+              onDelete={
+                userIds.has(rb.id) ? () => void deleteRunbook(rb.id) : undefined
+              }
+            />
           ))}
-          {byCategory.length === 0 && (
-            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-6 text-sm text-[var(--color-muted)]">
-              {runbooks.length === 0
-                ? "Loading runbooks…"
-                : "No runbooks match this filter."}
-            </div>
-          )}
-        </section>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-8 text-center text-sm text-[var(--color-muted)]">
+          {runbooks.length === 0
+            ? "Loading runbooks…"
+            : "No runbooks match your search."}
+        </div>
+      )}
 
-        <section className="space-y-4">
-          {selectedSummary && (
-            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="text-lg font-semibold">
-                    {selectedSummary.name}
-                  </h3>
-                  <p className="mt-1 text-sm text-[var(--color-muted)]">
-                    {selectedSummary.description}
-                  </p>
-                </div>
-                <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-                  {selectedSummary.step_count} step
-                  {selectedSummary.step_count === 1 ? "" : "s"}
-                </span>
-              </div>
-              {selectedSummary.symptoms.length > 0 && (
-                <ul className="mt-3 grid gap-1 text-xs text-[var(--color-muted)] sm:grid-cols-2">
-                  {selectedSummary.symptoms.map((s, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-[var(--color-accent)]" />
-                      <span>{s}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-
-          {(transcript.length > 0 || running || execution) && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                  Transcript
-                  {liveRunbookName && (
-                    <span className="ml-2 text-[var(--color-fg)] normal-case">
-                      {liveRunbookName}
-                    </span>
-                  )}
-                </h3>
-                {execution && (
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                      OUTCOME_META[execution.outcome].tone
-                    }`}
-                  >
-                    {OUTCOME_META[execution.outcome].label}
-                  </span>
-                )}
-              </div>
-              <div className="space-y-2">
-                {transcript.map((step, i) => (
-                  <StepCard key={`${step.step_id}-${i}`} step={step} />
-                ))}
-              </div>
-              {running && transcript.length === 0 && (
-                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-panel)] p-4 text-sm text-[var(--color-muted)]">
-                  Starting probes…
-                </div>
-              )}
-            </div>
-          )}
-
-          {narration && (
-            <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                Narrative
-              </h3>
-              <div className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[var(--color-fg)]">
-                {narration}
-              </div>
-            </div>
-          )}
-        </section>
-      </div>
+      {showBuilder && (
+        <RunbookBuilderModal
+          onClose={() => setShowBuilder(false)}
+          onSaved={() => {
+            setShowBuilder(false);
+            void loadCatalog();
+          }}
+        />
+      )}
     </div>
   );
 }

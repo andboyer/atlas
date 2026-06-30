@@ -11,7 +11,6 @@ import {
   Wrench,
   Bell,
   Waves,
-  Stethoscope,
   Server,
   ScanSearch,
 } from "lucide-react";
@@ -51,7 +50,6 @@ import { RunbooksPanel } from "./components/RunbooksPanel";
 import HostInventoryPanel from "./components/HostInventoryPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import SkillPackBrowser from "./components/SkillPackBrowser";
-import { RunbookBuilder } from "./components/RunbookBuilder";
 import ApprovalModal from "./components/ApprovalModal";
 import IpScannerPanel from "./components/IpScannerPanel";
 import { useApp } from "./store";
@@ -539,15 +537,7 @@ function App() {
                   <AvDiagnostics />
                 )}
                 {activeGroup === "avfleet" && activeSub === "runbooks" && (
-                  <section>
-                    <SectionHeading
-                      icon={<Stethoscope className="h-3.5 w-3.5" />}
-                    >
-                      Runbooks
-                    </SectionHeading>
-                    <RunbooksPanel />
-                    <RunbookBuilder />
-                  </section>
+                  <RunbooksPanel />
                 )}
                 {activeGroup === "avfleet" && activeSub === "fleet" && (
                   <div className="space-y-8">
