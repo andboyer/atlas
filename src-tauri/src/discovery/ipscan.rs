@@ -42,7 +42,10 @@ const PORT_TIMEOUT_RETRY: Duration = Duration::from_millis(2000);
 /// per host (each holding pipe fds) and the port probe opens hundreds of
 /// sockets at once — on macOS the default `RLIMIT_NOFILE` soft limit is only
 /// 256, so without raising it `connect()` starts failing with `EMFILE` and
-/// genuinely-open ports get silently reported as closed.
+/// genuinely-open ports get silently reported as closed. Only consumed by the
+/// `#[cfg(unix)]` `raise_fd_limit`, so gate it to avoid a dead-code lint on
+/// Windows.
+#[cfg(unix)]
 const FD_SOFT_TARGET: u64 = 8192;
 
 /// Curated TCP ports worth probing on a LAN host. Kept small so the port

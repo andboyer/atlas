@@ -3,9 +3,13 @@ use crate::detect::{self, AnomalySignal, Context};
 use crate::settings::Settings;
 use crate::store::{DeviceEvent, IncidentCorrelation, MetricSample, ScanSummary, Store};
 use crate::types::{
-    AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, PtpProbeResult,
-    ScanResult, StressTestResult,
+    AvDiagnosticsResult, DeepProbeResult, DeviceClass, DeviceInfo, IgmpProbeResult, ScanResult,
+    StressTestResult,
 };
+// Only used by the macOS ptp-listen elevation path below; gated to avoid an
+// unused-import lint on Linux/Windows.
+#[cfg(target_os = "macos")]
+use crate::types::PtpProbeResult;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::path::PathBuf;
