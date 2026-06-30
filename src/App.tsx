@@ -51,7 +51,7 @@ import { RunbooksPanel } from "./components/RunbooksPanel";
 import HostInventoryPanel from "./components/HostInventoryPanel";
 import AuditLogPanel from "./components/AuditLogPanel";
 import SkillPackBrowser from "./components/SkillPackBrowser";
-import RunbookEditor from "./components/RunbookEditor";
+import { RunbookBuilder } from "./components/RunbookBuilder";
 import ApprovalModal from "./components/ApprovalModal";
 import IpScannerPanel from "./components/IpScannerPanel";
 import { useApp } from "./store";
@@ -546,18 +546,23 @@ function App() {
                       Runbooks
                     </SectionHeading>
                     <RunbooksPanel />
+                    <RunbookBuilder />
                   </section>
                 )}
                 {activeGroup === "avfleet" && activeSub === "fleet" && (
                   <div className="space-y-8">
                     <section>
                       <SectionHeading icon={<Server className="h-3.5 w-3.5" />}>
-                        Host inventory
+                        Managed hosts &amp; switches
                       </SectionHeading>
+                      <p className="mb-3 text-xs text-[var(--color-muted)]">
+                        Devices Atlas can log into to run automated checks and
+                        fixes from runbooks. Add a host, then attach the skill
+                        pack that matches its vendor.
+                      </p>
                       <HostInventoryPanel />
                     </section>
                     <SkillPackBrowser />
-                    <RunbookEditor />
                     <AuditLogPanel />
                   </div>
                 )}
