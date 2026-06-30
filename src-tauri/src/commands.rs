@@ -2904,6 +2904,31 @@ pub async fn run_deep_probes(
                 .map_err(|e| format!("sap join: {e}"))?;
             out.sap = Some(sap);
         }
+        "stp-listen" => {
+            // Spanning-tree / L2-loop listen needs raw datalink capture, which
+            // requires admin on macOS (/dev/bpf) and Windows (Npcap). Route it
+            // through the same elevation path as IGMP. Linux has no L2 capture
+            // yet, so it runs in-process and returns `not_supported`.
+            const STP_LISTEN_SECS: u32 = 30;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                let json =
+                    elevate_and_run_probe(&exe, "stp-listen", &iface, STP_LISTEN_SECS).await?;
+                let stp: crate::types::StpProbeResult = serde_json::from_str(json.trim())
+                    .map_err(|e| format!("parse StpProbeResult: {e}; raw={json:?}"))?;
+                out.stp = Some(stp);
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                let i = iface.clone();
+                let stp = tokio::task::spawn_blocking(move || {
+                    crate::probes::stp::run_blocking(&i, STP_LISTEN_SECS)
+                })
+                .await
+                .map_err(|e| format!("stp join: {e}"))?;
+                out.stp = Some(stp);
+            }
+        }
         "all" => {
             // Spawn every unprivileged probe in parallel and combine
             // all privileged probes into a single elevated dispatch so
@@ -2920,6 +2945,13 @@ pub async fn run_deep_probes(
             let i = iface.clone();
             let lldp_h =
                 tokio::task::spawn_blocking(move || crate::probes::lldp::run_blocking(&i, 12));
+            // STP runs UNPRIVILEGED in `all` so the full audit keeps to a
+            // single auth prompt (IGMP). On macOS that yields a "needs admin"
+            // silent result nudging the operator to the dedicated STP test;
+            // the standalone `stp-listen` kind runs it elevated.
+            let i = iface.clone();
+            let stp_h =
+                tokio::task::spawn_blocking(move || crate::probes::stp::run_blocking(&i, 20));
             #[cfg(unix)]
             let dscp_h = {
                 let i = iface.clone();
@@ -2944,13 +2976,14 @@ pub async fn run_deep_probes(
             const IGMP_LISTEN_SECS: u32 = 260;
             let igmp_fut = elevate_and_run_probe(&exe, "igmp-listen", &iface, IGMP_LISTEN_SECS);
 
-            let (ptp_r, sap_r, link_r, lldp_r, igmp_json) =
-                tokio::join!(ptp_h, sap_h, link_h, lldp_h, igmp_fut);
+            let (ptp_r, sap_r, link_r, lldp_r, stp_r, igmp_json) =
+                tokio::join!(ptp_h, sap_h, link_h, lldp_h, stp_h, igmp_fut);
 
             out.ptp = ptp_r.ok();
             out.sap = sap_r.ok();
             out.link_audit = link_r.ok();
             out.lldp = lldp_r.ok();
+            out.stp = stp_r.ok();
             match igmp_json {
                 Ok(json) => match serde_json::from_str::<IgmpProbeResult>(json.trim()) {
                     Ok(v) => out.igmp = Some(v),
@@ -3005,6 +3038,7 @@ pub async fn run_deep_probes(
                 lldp: out.lldp.clone().or(prev.lldp),
                 link_audit: out.link_audit.clone().or(prev.link_audit),
                 sap: out.sap.clone().or(prev.sap),
+                stp: out.stp.clone().or(prev.stp),
             },
             None => out.clone(),
         };

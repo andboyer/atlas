@@ -1,0 +1,38 @@
+id: l2-loop-stp-instability
+name: L2 loop or spanning-tree instability
+category: switching
+applies_to: [switch, stp, loop, dante, aes67]
+description: >
+  A Layer-2 switching loop or an unstable spanning tree causes random
+  dropouts, devices "falling off" the network, and saturated links. This
+  runbook passively listens for spanning-tree BPDUs and for the broadcast /
+  duplicate-frame storms that fingerprint a loop, then points you at the
+  upstream switch to fix it. It never transmits, so it can't make a storm
+  worse.
+symptoms:
+  - "network loop"
+  - "switching loop"
+  - "broadcast storm"
+  - "spanning tree instability"
+  - "stp topology change flapping"
+  - "bpdu"
+  - "multiple root bridges"
+  - "devices randomly dropping off the network"
+  - "network goes slow then recovers"
+
+steps:
+  - id: stp
+    tool: local.stp_listen
+    args: { iface: "{nic}", duration_s: 30 }
+    bind: stp
+    warn_if: stp.verdict == 'loop_suspected' || stp.verdict == 'topology_unstable' || stp.verdict == 'multiple_roots'
+    warn_msg: "{stp.detail} Isolate it by unplugging one uplink / patch lead at a time until the broadcast rate drops — look for a cable bridging two switch ports, an unmanaged switch wired into a loop, or a port that should be blocking but is forwarding."
+    note_if: stp.verdict == 'legacy_stp' || stp.verdict == 'no_bpdus_observed' || stp.verdict == 'silent' || stp.verdict == 'unavailable' || stp.verdict == 'not_supported'
+    note_msg: "{stp.detail}"
+
+  - id: lldp
+    tool: local.lldp_probe
+    args: { iface: "{nic}", duration_s: 30 }
+    bind: lldp
+    note_if: lldp.verdict == 'switch_identified' || lldp.verdict == 'neighbors_only'
+    note_msg: "Upstream neighbour(s) identified via {lldp.mechanism} — start the loop hunt on that switch. Check `show spanning-tree` / `show spanning-tree active` (Cisco) for ports cycling Listening→Learning→Forwarding, a climbing TCN counter, and any port in the affected VLAN that should be blocking but is forwarding. Enable BPDU Guard and loop-guard on edge/access ports so a future loop is shut down automatically."

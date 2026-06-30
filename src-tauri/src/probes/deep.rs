@@ -52,6 +52,7 @@ pub fn try_dispatch(args: &[String]) -> Option<i32> {
     match kind.as_str() {
         "igmp-listen" => Some(run_igmp_listen(args)),
         "ptp-listen" => Some(run_ptp_listen(args)),
+        "stp-listen" => Some(run_stp_listen(args)),
         #[cfg(target_os = "windows")]
         "dscp-audit" => Some(run_dscp_audit(args)),
         other => {
@@ -154,6 +155,35 @@ fn run_ptp_listen(args: &[String]) -> i32 {
         Ok(s) => s,
         Err(e) => {
             eprintln!("serialise PtpProbeResult: {e}");
+            return 1;
+        }
+    };
+    if let Some(path) = arg_value(args, "--probe-out") {
+        if let Err(e) = std::fs::write(&path, &json) {
+            eprintln!("write probe output to {path}: {e}");
+            return 1;
+        }
+    } else {
+        println!("{json}");
+    }
+    0
+}
+
+fn run_stp_listen(args: &[String]) -> i32 {
+    let iface = arg_value(args, "--iface").unwrap_or_else(|| "en0".to_string());
+    // STP Hello BPDUs arrive every ~2s; a ~30s window catches several Hellos
+    // and gives broadcast-storm / topology-change instability time to show.
+    let listen_secs: u32 = arg_value(args, "--secs")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30)
+        .clamp(5, 120);
+
+    let result = crate::probes::stp::run_blocking(&iface, listen_secs);
+
+    let json = match serde_json::to_string(&result) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("serialise StpProbeResult: {e}");
             return 1;
         }
     };

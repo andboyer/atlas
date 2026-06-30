@@ -563,6 +563,52 @@ pub struct DeepProbeResult {
     pub lldp: Option<LldpProbeResult>,
     pub link_audit: Option<LinkAuditResult>,
     pub sap: Option<SapProbeResult>,
+    pub stp: Option<StpProbeResult>,
+}
+
+/// Result of the passive STP / L2-loop listener. Captures multicast +
+/// broadcast frames at the datalink layer (BPF on macOS, Npcap on Windows)
+/// and folds together spanning-tree health (BPDUs) and loop symptoms
+/// (broadcast rate, duplicate frames). Never transmits a frame.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StpProbeResult {
+    pub iface: String,
+    pub listen_secs: u32,
+    /// Total multicast/broadcast frames captured.
+    pub frames_seen: u32,
+    /// Spanning-tree BPDUs parsed (STP/RSTP/MSTP/PVST+).
+    pub bpdus_seen: u32,
+    /// Topology-change events (TC flag set or TCN BPDUs).
+    pub topology_changes: u32,
+    /// Peak broadcast frames/second over any 1-second window.
+    pub broadcast_pps_peak: f32,
+    /// Peak (non-broadcast) multicast frames/second.
+    pub multicast_pps_peak: f32,
+    /// Fraction of captured frames that were byte-identical replays within a
+    /// few milliseconds — a direct loop fingerprint.
+    pub duplicate_frame_ratio: f32,
+    /// Observed spanning-tree variant(s), e.g. `"rstp"`, `"stp / pvst+"`.
+    pub stp_version: Option<String>,
+    /// Distinct root bridges observed (>1 indicates merged/misconfigured trees).
+    pub root_bridges: Vec<StpRootBridge>,
+    /// `"stp_healthy"` | `"legacy_stp"` | `"multiple_roots"` |
+    /// `"topology_unstable"` | `"loop_suspected"` | `"no_bpdus_observed"` |
+    /// `"silent"` | `"not_supported"` | `"error"`.
+    pub verdict: String,
+    /// Human-readable interpretation of the verdict.
+    pub detail: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StpRootBridge {
+    /// `"<priority>.<mac>"`, e.g. `"32768.00:1d:c1:08:00:42"`.
+    pub bridge_id: String,
+    pub priority: u16,
+    pub mac: String,
+    pub root_path_cost: u32,
+    pub version: String,
+    pub announces_seen: u32,
 }
 
 /// Result of a passive listen on a raw IGMP socket. We listen rather than

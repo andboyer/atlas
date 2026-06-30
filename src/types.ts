@@ -540,6 +540,7 @@ export interface DeepProbeResult {
   lldp: LldpProbeResult | null;
   link_audit: LinkAuditResult | null;
   sap: SapProbeResult | null;
+  stp: StpProbeResult | null;
 }
 
 export interface PtpGrandmaster {
@@ -664,6 +665,33 @@ export interface SapProbeResult {
   announcements_seen: number;
   /** "streams_found" | "silent" | "error". */
   verdict: string;
+  error: string | null;
+}
+
+export interface StpRootBridge {
+  /** "<priority>.<mac>". */
+  bridge_id: string;
+  priority: number;
+  mac: string;
+  root_path_cost: number;
+  version: string;
+  announces_seen: number;
+}
+
+export interface StpProbeResult {
+  iface: string;
+  listen_secs: number;
+  frames_seen: number;
+  bpdus_seen: number;
+  topology_changes: number;
+  broadcast_pps_peak: number;
+  multicast_pps_peak: number;
+  duplicate_frame_ratio: number;
+  stp_version: string | null;
+  root_bridges: StpRootBridge[];
+  /** "stp_healthy" | "legacy_stp" | "multiple_roots" | "topology_unstable" | "loop_suspected" | "no_bpdus_observed" | "silent" | "not_supported" | "error". */
+  verdict: string;
+  detail: string | null;
   error: string | null;
 }
 

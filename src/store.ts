@@ -35,23 +35,42 @@ export interface ChatMessage {
 }
 
 /**
- * Parse the JSON envelope the `radio_insights` backend returns. Models
- * occasionally wrap the JSON in ```json fences despite our "strict JSON"
- * prompt, so we strip common fences and try to recover the first/last brace
- * pair before giving up.
+ * Recover the JSON object from an LLM reply. Reasoning models (qwen3, QwQ,
+ * deepseek-r1) emit a `<think>…</think>` block before the answer — and that
+ * block routinely contains its own braces, which broke the naive first-`{` /
+ * last-`}` slice and made suggestion generation fail. We strip reasoning
+ * blocks and markdown fences first, then take the outermost brace pair.
  */
-function parseRadioInsights(raw: string): RadioInsight[] | null {
+function extractJsonSlice(raw: string): string | null {
   if (!raw) return null;
   let text = raw.trim();
+  // Drop <think>…</think> / <thinking>…</thinking> reasoning blocks.
+  text = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+    .trim();
   // Strip ```json … ``` or ``` … ``` fences if present.
   if (text.startsWith("```")) {
-    text = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    text = text
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
   }
-  // Fall back to the outermost {...} block if there's surrounding prose.
+  // Take the outermost {...} block, ignoring any surrounding prose.
   const first = text.indexOf("{");
   const last = text.lastIndexOf("}");
   if (first === -1 || last === -1 || last <= first) return null;
-  const slice = text.slice(first, last + 1);
+  return text.slice(first, last + 1);
+}
+
+/**
+ * Parse the JSON envelope the `radio_insights` backend returns. Tolerates
+ * markdown fences and reasoning-model `<think>` preambles via
+ * `extractJsonSlice`.
+ */
+function parseRadioInsights(raw: string): RadioInsight[] | null {
+  const slice = extractJsonSlice(raw);
+  if (slice === null) return null;
   try {
     const obj = JSON.parse(slice);
     if (!obj || !Array.isArray(obj.items)) return null;
@@ -80,15 +99,8 @@ function parseRadioInsights(raw: string): RadioInsight[] | null {
  * are coerced to "general".
  */
 function parseAvInsights(raw: string): AvInsight[] | null {
-  if (!raw) return null;
-  let text = raw.trim();
-  if (text.startsWith("```")) {
-    text = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  }
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first === -1 || last === -1 || last <= first) return null;
-  const slice = text.slice(first, last + 1);
+  const slice = extractJsonSlice(raw);
+  if (slice === null) return null;
   try {
     const obj = JSON.parse(slice);
     if (!obj || !Array.isArray(obj.items)) return null;
@@ -494,6 +506,7 @@ export const useApp = create<AppState>((set, get) => ({
           lldp: null,
           link_audit: null,
           sap: null,
+          stp: null,
         };
         // Merge: keep prior fields, overlay any populated fields from
         // this probe, always bump ran_at. The backend ships
@@ -508,6 +521,7 @@ export const useApp = create<AppState>((set, get) => ({
           lldp: deep.lldp ?? prior.lldp,
           link_audit: deep.link_audit ?? prior.link_audit,
           sap: deep.sap ?? prior.sap,
+          stp: deep.stp ?? prior.stp,
         };
         set({ avDiagnostics: { ...current, deep_probe: merged } });
       }

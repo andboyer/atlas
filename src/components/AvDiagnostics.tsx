@@ -27,6 +27,7 @@ import type {
   PtpProbeResult,
   RunbookSummary,
   SapProbeResult,
+  StpProbeResult,
 } from "../types";
 
 /**
@@ -514,6 +515,7 @@ function DeepProbesCard({
   const lldp = deep?.lldp ?? null;
   const linkAudit = deep?.link_audit ?? null;
   const sap = deep?.sap ?? null;
+  const stp = deep?.stp ?? null;
 
   return (
     <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5">
@@ -581,6 +583,11 @@ function DeepProbesCard({
           result={sap}
           running={running}
           onRun={() => void onRun("sap-listen")}
+        />
+        <StpProbePanel
+          result={stp}
+          running={running}
+          onRun={() => void onRun("stp-listen")}
         />
       </div>
     </section>
@@ -744,6 +751,168 @@ function IgmpProbePanel({
                 </div>
               ))}
             </div>
+          )}
+          {result.error && (
+            <p className="text-[11px] italic text-rose-300">{result.error}</p>
+          )}
+        </div>
+      )}
+    </ProbePanelShell>
+  );
+}
+
+/** Map a problem STP verdict to a symptom string the deterministic runbook
+ *  matcher can resolve to the L2-loop / STP runbook. Healthy / inconclusive
+ *  verdicts return null (no suggestion). */
+function stpSymptom(verdict: string): string | null {
+  switch (verdict) {
+    case "loop_suspected":
+      return "switching loop broadcast storm duplicate frames";
+    case "topology_unstable":
+      return "spanning tree topology change instability flapping";
+    case "multiple_roots":
+      return "multiple stp root bridges spanning tree";
+    case "legacy_stp":
+      return "legacy stp spanning tree slow convergence";
+    default:
+      return null;
+  }
+}
+
+function StpProbePanel({
+  result,
+  running,
+  onRun,
+}: {
+  result: StpProbeResult | null;
+  running: boolean;
+  onRun: () => void;
+}) {
+  const openRunbook = useApp((s) => s.openRunbook);
+  const [suggestion, setSuggestion] = useState<RunbookSummary | null>(null);
+  const symptom = result ? stpSymptom(result.verdict) : null;
+  useEffect(() => {
+    let cancelled = false;
+    if (!symptom) {
+      setSuggestion(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const res = await invoke<(RunbookSummary | null)[]>("suggest_runbooks", {
+          symptoms: [symptom],
+        });
+        if (!cancelled) setSuggestion(res[0] ?? null);
+      } catch {
+        if (!cancelled) setSuggestion(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [symptom]);
+
+  const verdictMeta: Record<
+    string,
+    { label: string; tone: "good" | "warn" | "bad" | "info"; text: string }
+  > = {
+    stp_healthy: {
+      label: "STP healthy",
+      tone: "good",
+      text: "Spanning tree is stable: a single root bridge, modern RSTP/MSTP, and few topology changes.",
+    },
+    legacy_stp: {
+      label: "Legacy STP",
+      tone: "warn",
+      text: "Classic 802.1D STP detected — 30–50 s convergence drops AV streams on any topology change. Move this segment to RSTP/MSTP.",
+    },
+    multiple_roots: {
+      label: "Multiple roots",
+      tone: "bad",
+      text: "More than one STP root bridge on this segment — usually two spanning-tree domains bridged together, or a misconfigured root.",
+    },
+    topology_unstable: {
+      label: "Topology churn",
+      tone: "bad",
+      text: "Frequent topology changes — a flapping link or intermittent loop is forcing constant re-convergence (expect brief dropouts).",
+    },
+    loop_suspected: {
+      label: "Loop suspected",
+      tone: "bad",
+      text: "Broadcast storm and/or duplicate frames — the classic fingerprint of an L2 switching loop. Check for a cabling loop or a port that should be blocking.",
+    },
+    no_bpdus_observed: {
+      label: "No BPDUs",
+      tone: "info",
+      text: "No BPDUs seen. Edge ports with BPDU Guard/PortFast don't forward them, so this is inconclusive for STP — but the loop signals (broadcast rate, duplicates) remain valid.",
+    },
+    silent: {
+      label: "Silent",
+      tone: "info",
+      text: "No multicast/broadcast frames captured. On macOS this usually means the test needs admin — run it from this button.",
+    },
+    not_supported: {
+      label: "Unsupported",
+      tone: "info",
+      text: "Raw L2 capture for STP / loop detection isn't available on this platform yet.",
+    },
+    error: {
+      label: "Error",
+      tone: "bad",
+      text: "Capture failed to start.",
+    },
+  };
+  const meta = result?.verdict ? verdictMeta[result.verdict] : null;
+
+  return (
+    <ProbePanelShell
+      icon={<Cable className="h-4 w-4" />}
+      title="STP / L2 loop"
+      hint="Passively listens for spanning-tree BPDUs plus broadcast / duplicate-frame storms — the signatures of switching loops and an unstable spanning tree. Requires admin (raw capture)."
+      running={running}
+      onRun={onRun}
+      buttonLabel="Test"
+      badge={meta && <VerdictBadge tone={meta.tone} label={meta.label} />}
+    >
+      {!result ? (
+        <p className="text-xs text-[var(--color-muted)]">
+          Not run yet. Click <strong>Test</strong> to listen for ~30 s.
+        </p>
+      ) : (
+        <div className="space-y-2 text-xs">
+          <p className="leading-relaxed">{meta?.text ?? result.verdict}</p>
+          {result.detail && (
+            <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2 leading-relaxed text-[var(--color-muted)]">
+              {result.detail}
+            </p>
+          )}
+          <div className="text-[11px] text-[var(--color-muted)]">
+            iface <code>{result.iface}</code> · {result.bpdus_seen} BPDU(s) ·{" "}
+            {result.topology_changes} topo change(s) ·{" "}
+            {Math.round(result.broadcast_pps_peak)} bcast/s peak ·{" "}
+            {(result.duplicate_frame_ratio * 100).toFixed(0)}% dup
+            {result.stp_version ? <> · {result.stp_version}</> : null}
+          </div>
+          {result.root_bridges.length > 0 && (
+            <div className="space-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-panel)] p-2">
+              {result.root_bridges.map((r, i) => (
+                <div key={`${r.bridge_id}-${i}`} className="text-[11px]">
+                  root <code>{r.bridge_id}</code> · {r.version} · cost{" "}
+                  {r.root_path_cost} · {r.announces_seen} BPDU(s)
+                </div>
+              ))}
+            </div>
+          )}
+          {suggestion && (
+            <button
+              type="button"
+              onClick={() => openRunbook(suggestion.id)}
+              title={suggestion.description}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-2.5 py-1 text-[11px] font-semibold text-[var(--color-accent)] transition-opacity hover:opacity-80"
+            >
+              <Stethoscope className="h-3.5 w-3.5" />
+              Diagnose with “{suggestion.name}”
+            </button>
           )}
           {result.error && (
             <p className="text-[11px] italic text-rose-300">{result.error}</p>

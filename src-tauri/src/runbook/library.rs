@@ -76,6 +76,10 @@ const BUNDLED: &[(&str, &str)] = &[
         "lldp-no-neighbor",
         include_str!("../../../assets/runbooks/lldp-no-neighbor.yaml"),
     ),
+    (
+        "l2-loop-stp-instability",
+        include_str!("../../../assets/runbooks/l2-loop-stp-instability.yaml"),
+    ),
 ];
 
 #[derive(Debug, Clone, Default)]

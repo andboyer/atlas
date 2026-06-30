@@ -25,5 +25,6 @@ pub mod rogue;
 pub mod sap;
 pub mod services;
 pub mod speed_test;
+pub mod stp;
 pub mod traceroute;
 pub mod wan;

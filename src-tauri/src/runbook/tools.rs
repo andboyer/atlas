@@ -77,6 +77,7 @@ impl Registry {
         r.register(Arc::new(PingTool));
         r.register(Arc::new(GatewayTool));
         r.register(Arc::new(IgmpListenTool));
+        r.register(Arc::new(StpProbeTool));
         r
     }
 
@@ -413,4 +414,62 @@ impl Tool for IgmpListenTool {
             })),
         }
     }
+}
+
+/// Privileged STP / L2-loop listener. Re-execs the current binary under
+/// platform-native elevation (macOS osascript / Windows UAC / Linux
+/// pkexec) and parses the resulting `StpProbeResult`. Like the IGMP tool,
+/// a failed/declined elevation falls back to a `verdict: "unavailable"`
+/// JSON shape so runbook `note_if` guards still fire and the engine treats
+/// the step as `Unavailable` rather than a hard error.
+pub struct StpProbeTool;
+#[async_trait]
+impl Tool for StpProbeTool {
+    fn id(&self) -> &'static str {
+        "local.stp_listen"
+    }
+    fn description(&self) -> &'static str {
+        "Passively capture spanning-tree BPDUs + broadcast/duplicate frames to detect \
+         L2 loops and STP instability. Requires administrator authorisation."
+    }
+    async fn run(&self, args: Value, ctx: &ToolContext) -> Result<Value, ToolError> {
+        let iface = resolve_iface(&args, ctx)?;
+        let secs = arg_u32(&args, "duration_s", 30).clamp(5, 120);
+        let exe = match std::env::current_exe() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => return Ok(stp_unavailable(&iface, format!("locate current exe: {e}"))),
+        };
+        match crate::probes::elevate::elevate_and_run_probe(&exe, "stp-listen", &iface, secs).await
+        {
+            Ok(raw) => match serde_json::from_str::<Value>(raw.trim()) {
+                Ok(v) => Ok(v),
+                Err(e) => Ok(stp_unavailable(
+                    &iface,
+                    format!("parse StpProbeResult: {e}"),
+                )),
+            },
+            Err(e) => Ok(stp_unavailable(&iface, e)),
+        }
+    }
+}
+
+/// `StpProbeResult`-shaped fallback used when the privileged STP listener
+/// can't run, so runbook guards referencing `stp.verdict` / `stp.detail`
+/// still evaluate.
+fn stp_unavailable(iface: &str, error: String) -> Value {
+    json!({
+        "iface": iface,
+        "listen_secs": 0,
+        "frames_seen": 0,
+        "bpdus_seen": 0,
+        "topology_changes": 0,
+        "broadcast_pps_peak": 0.0,
+        "multicast_pps_peak": 0.0,
+        "duplicate_frame_ratio": 0.0,
+        "stp_version": null,
+        "root_bridges": [],
+        "verdict": "unavailable",
+        "detail": "The privileged STP / loop listener was unavailable or declined. Run the STP / L2 loop test from the AV tab and approve the admin prompt to capture BPDUs and broadcast traffic.",
+        "error": error,
+    })
 }
