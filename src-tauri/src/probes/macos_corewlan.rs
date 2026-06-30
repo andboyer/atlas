@@ -51,6 +51,29 @@ pub fn request_location_auth() {
     });
 }
 
+/// Read the *current* Wi-Fi link's RSSI + noise (dBm) in-process via CoreWLAN.
+///
+/// Unlike the `system_profiler SPAirPortDataType` child process — whose TCC
+/// posture is its own, so on macOS 14+ it returns the 0-dBm "no measurement"
+/// sentinel for Signal/Noise — this runs inside the app binary and therefore
+/// sees the app's Location Services grant, returning the real measurements.
+///
+/// Returns `(rssi, noise)`, each `None` when it reads the 0 sentinel (Wi-Fi
+/// off / not associated / not authorised). The outer `Option` is `None` when
+/// there's no Wi-Fi interface at all. Blocking — run on `spawn_blocking`.
+pub fn current_link_signal() -> Option<(Option<i32>, Option<i32>)> {
+    // SAFETY: `sharedWiFiClient` / `interface` / `rssiValue` /
+    // `noiseMeasurement` are standard Objective-C scalar accessors with no
+    // documented threading constraints beyond "not from a signal handler".
+    unsafe {
+        let client = CWWiFiClient::sharedWiFiClient();
+        let iface: Retained<CWInterface> = client.interface()?;
+        let rssi = iface.rssiValue() as i32;
+        let noise = iface.noiseMeasurement() as i32;
+        Some(((rssi != 0).then_some(rssi), (noise != 0).then_some(noise)))
+    }
+}
+
 /// Perform a CoreWLAN scan from this process. Returns the same shape as the
 /// system_profiler / Swift helper paths so the caller can substitute freely.
 ///
