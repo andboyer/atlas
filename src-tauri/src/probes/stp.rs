@@ -74,7 +74,12 @@ pub fn run_blocking(iface: &str, listen_secs: u32) -> StpProbeResult {
     let mut result = acc.finish(iface, listen_secs);
 
     if let Err(e) = captured {
-        let msg = e.to_string();
+        // anyhow's plain Display shows only the outermost context (e.g.
+        // "open /dev/bpf"); the `:#` alternate form appends the source chain
+        // ("…: Permission denied (os error 13)") so the EACCES/EPERM checks
+        // below actually match an unprivileged capture and surface the
+        // friendly "needs admin" nudge instead of a raw error.
+        let msg = format!("{e:#}");
         let lower = msg.to_lowercase();
         if lower.contains("not supported") {
             result.verdict = "not_supported".to_string();
