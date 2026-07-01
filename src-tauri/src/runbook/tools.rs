@@ -387,7 +387,9 @@ impl Tool for IgmpListenTool {
                 }));
             }
         };
-        match crate::probes::elevate::elevate_and_run_probe(&exe, "igmp-listen", &iface, secs).await
+        match crate::probes::agent::shared()
+            .run_probe(&exe, "igmp-listen", &iface, secs)
+            .await
         {
             Ok(raw) => match serde_json::from_str::<Value>(raw.trim()) {
                 Ok(v) => Ok(v),
@@ -439,7 +441,9 @@ impl Tool for StpProbeTool {
             Ok(p) => p.to_string_lossy().into_owned(),
             Err(e) => return Ok(stp_unavailable(&iface, format!("locate current exe: {e}"))),
         };
-        match crate::probes::elevate::elevate_and_run_probe(&exe, "stp-listen", &iface, secs).await
+        match crate::probes::agent::shared()
+            .run_probe(&exe, "stp-listen", &iface, secs)
+            .await
         {
             Ok(raw) => match serde_json::from_str::<Value>(raw.trim()) {
                 Ok(v) => Ok(v),

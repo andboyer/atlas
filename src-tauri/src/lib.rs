@@ -32,6 +32,13 @@ use tauri::Manager;
 /// probe ran (the binary should then exit immediately) and `None` for the
 /// normal GUI launch path.
 pub fn try_handle_probe_args(args: &[String]) -> Option<i32> {
+    // The macOS session-scoped privileged agent re-execs the binary with
+    // `--probe-agent`; it runs a long-lived root probe server (one prompt
+    // per app launch) instead of the one-shot `--probe <kind>` mode.
+    #[cfg(target_os = "macos")]
+    if args.iter().any(|a| a == "--probe-agent") {
+        return Some(probes::agent::run_agent(args));
+    }
     probes::deep::try_dispatch(args)
 }
 

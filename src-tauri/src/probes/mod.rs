@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod av;
 pub mod captive;
 pub mod channel_scan;

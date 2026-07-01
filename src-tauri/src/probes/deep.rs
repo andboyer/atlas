@@ -67,6 +67,45 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.get(idx + 1).cloned()
 }
 
+/// Run one privileged listener probe and return its serialised JSON. Used
+/// by the session-scoped privileged agent (`probes::agent`) on macOS,
+/// which dispatches probes in-process as root rather than re-execing the
+/// binary per run. The `secs` clamps mirror the per-kind CLI paths above;
+/// a `secs` of `0` selects each probe's default window.
+#[cfg(target_os = "macos")]
+pub fn run_probe_to_json(kind: &str, iface: &str, secs: u32) -> Result<String, String> {
+    match kind {
+        "igmp-listen" => {
+            let listen_secs = if secs == 0 { 260 } else { secs.clamp(1, 300) };
+            let result = match listen_for_igmp(iface, listen_secs) {
+                Ok(r) => r,
+                Err(e) => IgmpProbeResult {
+                    iface: iface.to_string(),
+                    listen_secs,
+                    queriers_seen: Vec::new(),
+                    reports_seen: 0,
+                    leaves_seen: 0,
+                    verdict: "error".to_string(),
+                    detail: None,
+                    error: Some(e.to_string()),
+                },
+            };
+            serde_json::to_string(&result).map_err(|e| format!("serialise IgmpProbeResult: {e}"))
+        }
+        "ptp-listen" => {
+            let listen_secs = if secs == 0 { 12 } else { secs.clamp(1, 60) };
+            let result = crate::probes::ptp::run_blocking(iface, listen_secs);
+            serde_json::to_string(&result).map_err(|e| format!("serialise PtpProbeResult: {e}"))
+        }
+        "stp-listen" => {
+            let listen_secs = if secs == 0 { 30 } else { secs.clamp(5, 120) };
+            let result = crate::probes::stp::run_blocking(iface, listen_secs);
+            serde_json::to_string(&result).map_err(|e| format!("serialise StpProbeResult: {e}"))
+        }
+        other => Err(format!("unsupported probe kind: {other}")),
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn run_dscp_audit(args: &[String]) -> i32 {
     let iface = arg_value(args, "--iface").unwrap_or_default();

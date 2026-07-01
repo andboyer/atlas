@@ -2834,7 +2834,9 @@ pub async fn run_deep_probes(
             // after a query. A shorter ~130s window has a meaningful chance
             // of missing the query and producing a false "no querier"
             // verdict on a perfectly healthy network.
-            let json = elevate_and_run_probe(&exe, "igmp-listen", &iface, 260).await?;
+            let json = crate::probes::agent::shared()
+                .run_probe(&exe, "igmp-listen", &iface, 260)
+                .await?;
             let igmp: IgmpProbeResult = serde_json::from_str(json.trim())
                 .map_err(|e| format!("parse IgmpProbeResult: {e}; raw={json:?}"))?;
             out.igmp = Some(igmp);
@@ -2847,7 +2849,9 @@ pub async fn run_deep_probes(
             // capture isn't implemented, so we stay unprivileged.
             #[cfg(target_os = "macos")]
             {
-                let json = elevate_and_run_probe(&exe, "ptp-listen", &iface, 12).await?;
+                let json = crate::probes::agent::shared()
+                    .run_probe(&exe, "ptp-listen", &iface, 12)
+                    .await?;
                 let ptp: PtpProbeResult = serde_json::from_str(json.trim())
                     .map_err(|e| format!("parse PtpProbeResult: {e}; raw={json:?}"))?;
                 out.ptp = Some(ptp);
@@ -2874,7 +2878,9 @@ pub async fn run_deep_probes(
             }
             #[cfg(windows)]
             {
-                let json = elevate_and_run_probe(&exe, "dscp-audit", &iface, 12).await?;
+                let json = crate::probes::agent::shared()
+                    .run_probe(&exe, "dscp-audit", &iface, 12)
+                    .await?;
                 let dscp: crate::types::DscpProbeResult = serde_json::from_str(json.trim())
                     .map_err(|e| format!("parse DscpProbeResult: {e}; raw={json:?}"))?;
                 out.dscp = Some(dscp);
@@ -2912,8 +2918,9 @@ pub async fn run_deep_probes(
             const STP_LISTEN_SECS: u32 = 30;
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
-                let json =
-                    elevate_and_run_probe(&exe, "stp-listen", &iface, STP_LISTEN_SECS).await?;
+                let json = crate::probes::agent::shared()
+                    .run_probe(&exe, "stp-listen", &iface, STP_LISTEN_SECS)
+                    .await?;
                 let stp: crate::types::StpProbeResult = serde_json::from_str(json.trim())
                     .map_err(|e| format!("parse StpProbeResult: {e}; raw={json:?}"))?;
                 out.stp = Some(stp);
@@ -2974,7 +2981,12 @@ pub async fn run_deep_probes(
             // above or "Run all" results will look misleadingly silent
             // vs. "Test IGMP".
             const IGMP_LISTEN_SECS: u32 = 260;
-            let igmp_fut = elevate_and_run_probe(&exe, "igmp-listen", &iface, IGMP_LISTEN_SECS);
+            let igmp_fut = crate::probes::agent::shared().run_probe(
+                &exe,
+                "igmp-listen",
+                &iface,
+                IGMP_LISTEN_SECS,
+            );
 
             let (ptp_r, sap_r, link_r, lldp_r, stp_r, igmp_json) =
                 tokio::join!(ptp_h, sap_h, link_h, lldp_h, stp_h, igmp_fut);
@@ -3047,8 +3059,6 @@ pub async fn run_deep_probes(
 
     Ok(out)
 }
-
-use crate::probes::elevate::elevate_and_run_probe;
 
 /// Ask the configured LLM for AV-over-IP issues + suggestions. Returns
 /// raw JSON text (`{ "items": [...] }`) for the frontend to parse.
